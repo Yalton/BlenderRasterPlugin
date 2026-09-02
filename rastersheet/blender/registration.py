@@ -1,9 +1,10 @@
 import bpy
 
-from . import panel, properties
+from . import operator, panel, properties
 
 CLASSES = (
     properties.RasterSheetSettings,
+    operator.RASTERSHEET_OT_render,
     panel.RASTERSHEET_PT_panel,
 )
 

@@ -78,3 +78,6 @@ class RASTERSHEET_PT_panel(bpy.types.Panel):
         export.prop(settings, "export_godot")
         if settings.export_godot:
             export.prop(settings, "godot_res_prefix")
+
+        layout.separator()
+        layout.operator("rastersheet.render", icon="RENDER_RESULT")

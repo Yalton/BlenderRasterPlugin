@@ -1,5 +1,7 @@
 """Headless Blender smoke tests. Run with: blender -b -P tests_blender/run_smoke.py"""
 
+import math
+import os
 import sys
 import traceback
 
@@ -7,6 +9,11 @@ import bpy
 import mathutils
 
 MODULE = "bl_ext.user_default.rastersheet"
+
+SCRATCH = os.environ.get(
+    "RASTERSHEET_SCRATCH",
+    "/tmp/claude-1000/-data-fast-Projects-Tech-Tools-BlenderRasterPlugin/9802a33f-d74c-460a-b8f6-1fa7cd9626fc/scratchpad",
+)
 
 
 def _fresh_cube(name="RasterSheetProbe"):
@@ -231,6 +238,81 @@ def test_snapshot_restores_multiple_objects_independently():
 
     assert (obj_a.matrix_world.to_translation() - before_a.to_translation()).length < 1e-6
     assert (obj_b.matrix_world.to_translation() - before_b.to_translation()).length < 1e-6
+
+
+@check
+def test_render_writes_individual_frames_and_restores_the_scene():
+    import os
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+
+    camera_data = bpy.data.cameras.new("ProbeCam")
+    camera = bpy.data.objects.new("ProbeCam", camera_data)
+    scene.collection.objects.link(camera)
+    camera.location = (0.0, -5.0, 0.0)
+    camera.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+    scene.camera = camera
+
+    out = os.path.join(SCRATCH, "frames_run")
+    shutil.rmtree(out, ignore_errors=True)
+
+    settings = scene.rastersheet
+    settings.frame_count = 4
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 32
+    settings.resolution_y = 32
+    settings.output_dir = out
+    settings.filename_stem = "probe"
+    settings.export_frames = True
+    settings.export_sheet = False
+    settings.export_json = False
+    settings.export_godot = False
+    settings.camera_mode = "CURRENT"
+
+    before_matrix = obj.matrix_world.copy()
+    before_engine = scene.render.engine
+    before_filepath = scene.render.filepath
+    before_transform = scene.view_settings.view_transform
+
+    result = bpy.ops.rastersheet.render()
+    assert result == {"FINISHED"}, result
+
+    frames = sorted(os.listdir(os.path.join(out, "probe_frames")))
+    assert frames == ["probe_0001.png", "probe_0002.png", "probe_0003.png", "probe_0004.png"], frames
+
+    assert (obj.matrix_world.to_translation() - before_matrix.to_translation()).length < 1e-6
+    assert scene.render.engine == before_engine
+    assert scene.render.filepath == before_filepath
+    assert scene.view_settings.view_transform == before_transform
+
+
+@check
+def test_render_rejects_a_missing_camera_without_touching_the_scene():
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+    previous_camera = scene.camera
+    scene.camera = None
+    before_filepath = scene.render.filepath
+
+    scene.rastersheet.camera_mode = "CURRENT"
+    # An ERROR-level self.report() combined with returning {'CANCELLED'} is
+    # raised by Blender as a RuntimeError when the operator is invoked via
+    # bpy.ops from a script, rather than returned as {'CANCELLED'} -- this is
+    # standard Blender behavior (verified against this build), not a bug in
+    # the operator.
+    try:
+        result = bpy.ops.rastersheet.render()
+    except RuntimeError as exc:
+        assert "camera" in str(exc).lower(), exc
+    else:
+        raise AssertionError(f"expected a RuntimeError, got {result}")
+
+    assert scene.render.filepath == before_filepath
+    scene.camera = previous_camera
 
 
 def main():
