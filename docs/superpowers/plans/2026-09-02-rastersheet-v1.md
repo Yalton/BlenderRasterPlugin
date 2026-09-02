@@ -1805,7 +1805,10 @@ def test_sheet_packing_is_pixel_identical_to_its_frames():
     shutil.rmtree(out, ignore_errors=True)
 
     settings = scene.rastersheet
-    settings.frame_count = 2
+    # Four frames over two columns gives TWO rows. A single-row layout would
+    # make the bottom-up flip a no-op (every cell.y is 0), so the test could
+    # not tell a correct flip from a missing one.
+    settings.frame_count = 4
     settings.columns = 2
     settings.sheet_mode = "GRID"
     settings.resolution_mode = "CUSTOM"
