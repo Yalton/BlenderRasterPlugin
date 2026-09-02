@@ -9,10 +9,13 @@ import bpy
 from mathutils import Vector
 
 from ..core.angles import frame_angles
+from ..core.godot import sprite_frames_tres
 from ..core.layout import sheet_layout
+from ..core.metadata import build_metadata
 from ..core.paths import build_output_paths, frame_filename
 from ..core.rotation import axis_vector, frame_matrix
 from . import camera as camera_module
+from . import export as export_module
 from . import lighting as lighting_module
 from . import packing as packing_module
 from . import render as render_module
@@ -100,6 +103,9 @@ def validate(context, settings):
 
     if settings.frame_count < 2:
         problems.append("Frame count must be at least 2")
+
+    if settings.export_godot and not settings.export_sheet:
+        problems.append("Godot export needs the sprite sheet enabled")
 
     if scene.render.pixel_aspect_x != 1.0 or scene.render.pixel_aspect_y != 1.0:
         problems.append("Non-square pixel aspect ratios are not supported")
@@ -243,19 +249,49 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
                 finally:
                     window_manager.progress_end()
 
+            layout = sheet_layout(
+                settings.frame_count,
+                settings.columns,
+                settings.sheet_mode,
+                width,
+                height,
+            )
+
             if settings.export_sheet:
-                layout = sheet_layout(
-                    settings.frame_count,
-                    settings.columns,
-                    settings.sheet_mode,
-                    width,
-                    height,
-                )
                 frame_paths = [
                     os.path.join(frames_dir, frame_filename(paths.stem, index))
                     for index in range(settings.frame_count)
                 ]
                 packing_module.pack_sheet(frame_paths, layout, paths.sheet)
+
+            image_name = os.path.basename(paths.sheet)
+
+            if settings.export_json:
+                document = build_metadata(
+                    image_name=image_name,
+                    layout=layout,
+                    animation_name=settings.animation_name,
+                    fps=settings.fps,
+                    loop=settings.loop,
+                    axis=settings.rotation_axis,
+                    start_deg=math.degrees(settings.start_angle),
+                    sweep_deg=math.degrees(settings.sweep_angle),
+                    clockwise=settings.clockwise,
+                )
+                export_module.write_metadata(paths.json, document)
+
+            if settings.export_godot:
+                prefix = settings.godot_res_prefix
+                if prefix and not prefix.endswith("/"):
+                    prefix += "/"
+                text = sprite_frames_tres(
+                    f"{prefix}{image_name}",
+                    layout,
+                    settings.animation_name,
+                    settings.fps,
+                    settings.loop,
+                )
+                export_module.write_tres(paths.tres, text)
         finally:
             if temp_frames_dir is not None:
                 shutil.rmtree(temp_frames_dir, ignore_errors=True)

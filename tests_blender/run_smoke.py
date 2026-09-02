@@ -1041,6 +1041,84 @@ def test_engine_override_resolves_and_restores():
     assert scene.render.engine == before_engine
 
 
+@check
+def test_full_export_writes_sheet_json_and_tres():
+    import json
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    obj.matrix_world = mathutils.Matrix.Identity(4)
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    out = os.path.join(SCRATCH, "full_run")
+    shutil.rmtree(out, ignore_errors=True)
+
+    settings = scene.rastersheet
+    settings.camera_mode = "CURRENT"
+    settings.lighting_mode = "FLAT"
+    settings.rotation_axis = "LOCAL_Z"
+    settings.frame_count = 4
+    settings.columns = 2
+    settings.sheet_mode = "GRID"
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 32
+    settings.resolution_y = 32
+    settings.output_dir = out
+    settings.filename_stem = "full"
+    settings.animation_name = "spin"
+    settings.fps = 12.0
+    settings.loop = True
+    settings.export_frames = True
+    settings.export_sheet = True
+    settings.export_json = True
+    settings.export_godot = True
+    # No trailing slash: the assertion below is only true if the operator
+    # normalizes the prefix before joining it to the sheet's filename.
+    settings.godot_res_prefix = "res://sprites"
+
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+
+    with open(os.path.join(out, "full.json"), encoding="utf-8") as handle:
+        document = json.load(handle)
+    assert document["image"] == "full.png"
+    assert document["frame_count"] == 4
+    assert (document["columns"], document["rows"]) == (2, 2)
+    assert (document["sheet_width"], document["sheet_height"]) == (64, 64)
+    assert document["rotation"]["axis"] == "LOCAL_Z"
+
+    with open(os.path.join(out, "full.tres"), encoding="utf-8") as handle:
+        tres = handle.read()
+    assert 'path="res://sprites/full.png"' in tres
+    assert "load_steps=6" in tres
+    assert tres.count("AtlasTexture_") == 8  # one declaration and one reference each
+
+
+@check
+def test_godot_export_requires_a_sheet():
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    settings = scene.rastersheet
+    settings.export_sheet = False
+    settings.export_godot = True
+    # Same bpy.ops quirk noted on test_render_rejects_a_missing_camera_
+    # without_touching_the_scene above: an ERROR-level self.report() plus a
+    # {'CANCELLED'} return surfaces as a RuntimeError through bpy.ops, not as
+    # the returned dict.
+    try:
+        result = bpy.ops.rastersheet.render()
+    except RuntimeError as exc:
+        assert "sheet" in str(exc).lower(), exc
+    else:
+        raise AssertionError(f"expected a RuntimeError, got {result}")
+    settings.export_godot = False
+    settings.export_sheet = True
+
+
 def main():
     enable_addon()
     for fn in CHECKS:
