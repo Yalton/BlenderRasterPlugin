@@ -32,6 +32,18 @@ def _fresh_cube(name="RasterSheetProbe"):
     return obj
 
 
+def _ensure_probe_camera(scene):
+    camera = bpy.data.objects.get("ProbeCam")
+    if camera is None:
+        camera_data = bpy.data.cameras.new("ProbeCam")
+        camera = bpy.data.objects.new("ProbeCam", camera_data)
+        scene.collection.objects.link(camera)
+    camera.location = (0.0, -5.0, 0.0)
+    camera.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+    scene.camera = camera
+    return camera
+
+
 def _matrices_close(a, b, tol=1e-6):
     """Component-wise comparison of the full 4x4 matrix, not just translation.
 
@@ -265,13 +277,7 @@ def test_render_writes_individual_frames_and_restores_the_scene():
     scene = bpy.context.scene
     obj = _fresh_cube()
     bpy.context.view_layer.objects.active = obj
-
-    camera_data = bpy.data.cameras.new("ProbeCam")
-    camera = bpy.data.objects.new("ProbeCam", camera_data)
-    scene.collection.objects.link(camera)
-    camera.location = (0.0, -5.0, 0.0)
-    camera.rotation_euler = (math.radians(90.0), 0.0, 0.0)
-    scene.camera = camera
+    _ensure_probe_camera(scene)
 
     out = os.path.join(SCRATCH, "frames_run")
     shutil.rmtree(out, ignore_errors=True)
@@ -405,6 +411,88 @@ def test_render_restores_the_scene_when_a_frame_fails_mid_loop():
     assert scene.render.resolution_y == before_res_y
     assert scene.render.film_transparent == before_film_transparent
     assert scene.render.filepath == before_filepath
+
+
+@check
+def test_sheet_packing_is_pixel_identical_to_its_frames():
+    import numpy as np
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    out = os.path.join(SCRATCH, "sheet_run")
+    shutil.rmtree(out, ignore_errors=True)
+
+    settings = scene.rastersheet
+    settings.frame_count = 2
+    settings.columns = 2
+    settings.sheet_mode = "GRID"
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 32
+    settings.resolution_y = 32
+    settings.output_dir = out
+    settings.filename_stem = "sheet"
+    settings.export_frames = True
+    settings.export_sheet = True
+    settings.export_json = False
+    settings.export_godot = False
+    settings.camera_mode = "CURRENT"
+
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+
+    sheet_path = os.path.join(out, "sheet.png")
+    frame_path = os.path.join(out, "sheet_frames", "sheet_0001.png")
+    assert os.path.isfile(sheet_path)
+
+    sheet = bpy.data.images.load(sheet_path)
+    frame = bpy.data.images.load(frame_path)
+    try:
+        assert tuple(sheet.size) == (64, 32), tuple(sheet.size)
+        assert sheet.colorspace_settings.name == frame.colorspace_settings.name
+
+        sheet_pixels = np.empty(64 * 32 * 4, dtype=np.float32)
+        sheet.pixels.foreach_get(sheet_pixels)
+        sheet_pixels = sheet_pixels.reshape(32, 64, 4)
+
+        frame_pixels = np.empty(32 * 32 * 4, dtype=np.float32)
+        frame.pixels.foreach_get(frame_pixels)
+        frame_pixels = frame_pixels.reshape(32, 32, 4)
+
+        # Frame 0 occupies the top-left cell, which is the top of the
+        # bottom-up buffer.
+        region = sheet_pixels[0:32, 0:32]
+        assert np.allclose(region, frame_pixels, atol=1e-6), np.abs(region - frame_pixels).max()
+    finally:
+        bpy.data.images.remove(sheet)
+        bpy.data.images.remove(frame)
+
+
+@check
+def test_sheet_only_export_leaves_no_frames_directory():
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    out = os.path.join(SCRATCH, "sheet_only_run")
+    shutil.rmtree(out, ignore_errors=True)
+
+    settings = scene.rastersheet
+    settings.frame_count = 2
+    settings.columns = 2
+    settings.output_dir = out
+    settings.filename_stem = "only"
+    settings.export_frames = False
+    settings.export_sheet = True
+
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+    assert os.path.isfile(os.path.join(out, "only.png"))
+    assert not os.path.exists(os.path.join(out, "only_frames"))
 
 
 def main():

@@ -2,14 +2,18 @@
 
 import math
 import os
+import shutil
+import tempfile
 
 import bpy
 from mathutils import Vector
 
 from ..core.angles import frame_angles
-from ..core.paths import build_output_paths
+from ..core.layout import sheet_layout
+from ..core.paths import build_output_paths, frame_filename
 from ..core.rotation import axis_vector, frame_matrix
 from . import camera as camera_module
+from . import packing as packing_module
 from . import render as render_module
 from . import snapshot
 
@@ -86,14 +90,13 @@ def validate(context, settings):
             problems.append("Custom HDRI mode needs a readable image path")
 
     width, height = resolution_for(scene, settings)
-    columns = settings.frame_count if settings.sheet_mode == "HORIZONTAL" else (
-        1 if settings.sheet_mode == "VERTICAL" else min(settings.columns, settings.frame_count)
-    )
-    rows = math.ceil(settings.frame_count / columns)
-    if columns * width > MAX_SHEET_SIDE or rows * height > MAX_SHEET_SIDE:
-        problems.append(
-            f"Sheet would be {columns * width}x{rows * height}, over Blender's {MAX_SHEET_SIDE}px limit"
-        )
+    if settings.frame_count >= 2:
+        layout = sheet_layout(settings.frame_count, settings.columns, settings.sheet_mode, width, height)
+        if layout.sheet_width > MAX_SHEET_SIDE or layout.sheet_height > MAX_SHEET_SIDE:
+            problems.append(
+                f"Sheet would be {layout.sheet_width}x{layout.sheet_height}, "
+                f"over Blender's {MAX_SHEET_SIDE}px limit"
+            )
 
     output_dir = bpy.path.abspath(settings.output_dir)
     writable_target = _writable_ancestor(output_dir)
@@ -145,45 +148,72 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
 
         output_dir = bpy.path.abspath(settings.output_dir)
         paths = build_output_paths(output_dir, settings.filename_stem)
-        frames_dir = paths.frames_dir
-        os.makedirs(frames_dir, exist_ok=True)
 
-        with snapshot.scene_snapshot(scene, [obj]) as stack:
-            depsgraph = context.evaluated_depsgraph_get()
-            base_matrix = obj.matrix_world.copy()
-            pivot = (
-                bounds_center(obj, depsgraph)
-                if settings.pivot_mode == "BOUNDS_CENTER"
-                else base_matrix.to_translation()
-            )
-            axis = axis_vector(settings.rotation_axis, base_matrix)
-            angles = frame_angles(
-                settings.frame_count,
-                math.degrees(settings.start_angle),
-                math.degrees(settings.sweep_angle),
-                settings.clockwise,
-            )
-            frame_matrices = [frame_matrix(base_matrix, axis, angle, pivot) for angle in angles]
+        temp_frames_dir = None
+        if settings.export_frames:
+            frames_dir = paths.frames_dir
+            os.makedirs(frames_dir, exist_ok=True)
+        else:
+            temp_frames_dir = tempfile.mkdtemp(prefix="rastersheet_")
+            frames_dir = temp_frames_dir
 
-            width, height = resolution_for(scene, settings)
-            scene.render.resolution_x = width
-            scene.render.resolution_y = height
-            scene.render.resolution_percentage = 100
-            scene.render.film_transparent = settings.transparent
-            scene.render.image_settings.file_format = "PNG"
-            scene.render.image_settings.color_mode = "RGBA" if settings.transparent else "RGB"
-            scene.render.image_settings.color_depth = "8"
+        width, height = resolution_for(scene, settings)
 
-            scene.camera = camera_module.resolve_camera(context, settings, stack, obj)
-
-            window_manager.progress_begin(0, settings.frame_count)
-            try:
-                jobs = render_module.frame_jobs(
-                    context, scene, obj, frame_matrices, frames_dir, paths.stem
+        try:
+            with snapshot.scene_snapshot(scene, [obj]) as stack:
+                depsgraph = context.evaluated_depsgraph_get()
+                base_matrix = obj.matrix_world.copy()
+                pivot = (
+                    bounds_center(obj, depsgraph)
+                    if settings.pivot_mode == "BOUNDS_CENTER"
+                    else base_matrix.to_translation()
                 )
-                for index in jobs:
-                    window_manager.progress_update(index + 1)
-            finally:
-                window_manager.progress_end()
+                axis = axis_vector(settings.rotation_axis, base_matrix)
+                angles = frame_angles(
+                    settings.frame_count,
+                    math.degrees(settings.start_angle),
+                    math.degrees(settings.sweep_angle),
+                    settings.clockwise,
+                )
+                frame_matrices = [
+                    frame_matrix(base_matrix, axis, angle, pivot) for angle in angles
+                ]
+
+                scene.render.resolution_x = width
+                scene.render.resolution_y = height
+                scene.render.resolution_percentage = 100
+                scene.render.film_transparent = settings.transparent
+                scene.render.image_settings.file_format = "PNG"
+                scene.render.image_settings.color_mode = "RGBA" if settings.transparent else "RGB"
+                scene.render.image_settings.color_depth = "8"
+
+                scene.camera = camera_module.resolve_camera(context, settings, stack, obj)
+
+                window_manager.progress_begin(0, settings.frame_count)
+                try:
+                    jobs = render_module.frame_jobs(
+                        context, scene, obj, frame_matrices, frames_dir, paths.stem
+                    )
+                    for index in jobs:
+                        window_manager.progress_update(index + 1)
+                finally:
+                    window_manager.progress_end()
+
+            if settings.export_sheet:
+                layout = sheet_layout(
+                    settings.frame_count,
+                    settings.columns,
+                    settings.sheet_mode,
+                    width,
+                    height,
+                )
+                frame_paths = [
+                    os.path.join(frames_dir, frame_filename(paths.stem, index))
+                    for index in range(settings.frame_count)
+                ]
+                packing_module.pack_sheet(frame_paths, layout, paths.sheet)
+        finally:
+            if temp_frames_dir is not None:
+                shutil.rmtree(temp_frames_dir, ignore_errors=True)
 
         return paths
