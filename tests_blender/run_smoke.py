@@ -32,6 +32,23 @@ def _fresh_cube(name="RasterSheetProbe"):
     return obj
 
 
+def _matrices_close(a, b, tol=1e-6):
+    """Component-wise comparison of the full 4x4 matrix, not just translation.
+
+    Comparing only `to_translation()` is blind to rotation: under the
+    default ORIGIN pivot, translation is mathematically constant across the
+    entire frame loop (T(pivot) @ R @ T(-pivot) @ base leaves the
+    translation column untouched at every angle), so a translation-only
+    check passes even if the object is left mid-spin with restoration
+    completely broken.
+    """
+    for row_a, row_b in zip(a, b):
+        for value_a, value_b in zip(row_a, row_b):
+            if abs(value_a - value_b) > tol:
+                return False
+    return True
+
+
 def enable_addon():
     bpy.ops.preferences.addon_enable(module=MODULE)
 
@@ -286,7 +303,7 @@ def test_render_writes_individual_frames_and_restores_the_scene():
     frames = sorted(os.listdir(os.path.join(out, "probe_frames")))
     assert frames == ["probe_0001.png", "probe_0002.png", "probe_0003.png", "probe_0004.png"], frames
 
-    assert (obj.matrix_world.to_translation() - before_matrix.to_translation()).length < 1e-6
+    assert _matrices_close(obj.matrix_world, before_matrix), (tuple(obj.matrix_world), tuple(before_matrix))
     assert scene.render.engine == before_engine
     assert scene.render.resolution_x == before_res_x
     assert scene.render.resolution_y == before_res_y
@@ -382,7 +399,7 @@ def test_render_restores_the_scene_when_a_frame_fails_mid_loop():
     else:
         raise AssertionError(f"expected the mid-loop render failure to raise, got {result}")
 
-    assert (obj.matrix_world.to_translation() - before_matrix.to_translation()).length < 1e-6
+    assert _matrices_close(obj.matrix_world, before_matrix), (tuple(obj.matrix_world), tuple(before_matrix))
     assert scene.render.engine == before_engine
     assert scene.render.resolution_x == before_res_x
     assert scene.render.resolution_y == before_res_y
