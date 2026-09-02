@@ -600,6 +600,17 @@ def test_auto_ortho_keeps_the_object_off_the_border_at_every_angle():
     settings.pivot_mode = "BOUNDS_CENTER"
     settings.frame_count = 4
     settings.columns = 2
+    settings.start_angle = 0.0
+    # The default sweep (360 degrees over 4 frames) steps in exact 90-degree
+    # increments about the cube's own centre on its default LOCAL_Y axis --
+    # a rotational symmetry of a cube, so all four frames render bit-identical
+    # geometry (confirmed by comparing world-space corner sets: they matched
+    # exactly). A sweep whose steps are not multiples of 90 degrees makes the
+    # cube's square cross-section trace a genuinely different (wider,
+    # "diamond") axis-aligned footprint at each angle instead. Verified this
+    # holds for this exact axis/pivot combination -- see the fix report for
+    # task 11 for the corner-set and rendered-pixel diffs.
+    settings.sweep_angle = math.radians(250.0)
     settings.resolution_mode = "CUSTOM"
     settings.resolution_x = 64
     settings.resolution_y = 64
