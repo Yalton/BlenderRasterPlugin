@@ -1,13 +1,22 @@
 import bpy
 
-CLASSES = ()
+from . import panel, properties
+
+CLASSES = (
+    properties.RasterSheetSettings,
+    panel.RASTERSHEET_PT_panel,
+)
 
 
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
+    bpy.types.Scene.rastersheet = bpy.props.PointerProperty(
+        type=properties.RasterSheetSettings
+    )
 
 
 def unregister():
+    del bpy.types.Scene.rastersheet
     for cls in reversed(CLASSES):
         bpy.utils.unregister_class(cls)
