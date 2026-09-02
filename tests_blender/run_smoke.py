@@ -411,6 +411,15 @@ def test_render_restores_the_scene_when_a_frame_fails_mid_loop():
     before_res_y = scene.render.resolution_y
     before_film_transparent = scene.render.film_transparent
     before_filepath = scene.render.filepath
+    # settings.lighting_mode defaults to MATERIAL_PREVIEW (reset by
+    # _reset_settings() before this check runs), so this run's snapshot
+    # builds a temporary world -- "an aborted run leaves no orphans in
+    # bpy.data" is a named global constraint, and this is the only check
+    # that induces a genuine mid-loop failure through the full operator, so
+    # it is where that constraint actually gets exercised.
+    before_world = scene.world
+    before_worlds = len(bpy.data.worlds)
+    before_images = len(bpy.data.images)
 
     # The render failure inside the loop makes operator.execute() report an
     # ERROR and return CANCELLED, which bpy.ops re-raises as a RuntimeError
@@ -429,6 +438,9 @@ def test_render_restores_the_scene_when_a_frame_fails_mid_loop():
     assert scene.render.resolution_y == before_res_y
     assert scene.render.film_transparent == before_film_transparent
     assert scene.render.filepath == before_filepath
+    assert scene.world == before_world
+    assert len(bpy.data.worlds) == before_worlds, "temp world orphaned after a mid-loop failure"
+    assert len(bpy.data.images) == before_images, "loaded HDRI/studio image orphaned after a mid-loop failure"
 
 
 @check
@@ -859,6 +871,80 @@ def test_apply_lighting_builds_the_expected_world_per_mode():
 
 
 @check
+def test_custom_hdri_wires_the_users_image_and_strength():
+    # CUSTOM_HDRI has zero coverage anywhere else: MATERIAL_PREVIEW exercises
+    # the shared _attach_environment helper via a bundled studio light, but
+    # this mode's own wiring -- bpy.path.abspath(settings.hdri_path) and
+    # settings.hdri_strength -- is untested, and it is a user-facing mode.
+    # Generate a throwaway image with non-uniform pixel content (so "some
+    # image got loaded" can't be confused with "the right image got
+    # loaded"), save it to scratch as a real file Blender can load back, and
+    # assert the temp world's environment node is wired to exactly that
+    # image and that Background strength reflects hdri_strength (2.5) rather
+    # than the hardcoded 1.0 the MATERIAL_PREVIEW path always uses.
+    import contextlib
+
+    from bl_ext.user_default.rastersheet.blender import lighting as lighting_module
+    from bl_ext.user_default.rastersheet.blender import snapshot as snapshot_module
+
+    path = os.path.join(SCRATCH, "smoke_custom_hdri.png")
+    generator = bpy.data.images.new("RasterSheetSmokeHDRIGen", width=4, height=4, alpha=False)
+    pixels = [0.0] * (4 * 4 * 4)
+    for y in range(4):
+        for x in range(4):
+            i = (y * 4 + x) * 4
+            checker = (x + y) % 2 == 0
+            pixels[i + 0] = 1.0 if checker else 0.0
+            pixels[i + 1] = 0.0
+            pixels[i + 2] = 0.0 if checker else 1.0
+            pixels[i + 3] = 1.0
+    generator.pixels.foreach_set(pixels)
+    generator.filepath_raw = path
+    generator.file_format = "PNG"
+    generator.save()
+    bpy.data.images.remove(generator)
+
+    scene = bpy.context.scene
+    settings = scene.rastersheet
+    before_world = scene.world
+    before_worlds = len(bpy.data.worlds)
+    before_images = len(bpy.data.images)
+
+    settings.lighting_mode = "CUSTOM_HDRI"
+    settings.hdri_path = path
+    settings.hdri_strength = 2.5
+
+    with contextlib.ExitStack() as stack:
+        snapshot_module.guard(stack, scene, "world")
+        lighting_module.apply_lighting(bpy.context, settings, stack)
+        world = scene.world
+        assert world != before_world
+        assert len(bpy.data.worlds) == before_worlds + 1
+        assert len(bpy.data.images) == before_images + 1
+
+        tree = world.node_tree
+        background = tree.nodes["Background"]
+        environment_nodes = [n for n in tree.nodes if n.type == "TEX_ENVIRONMENT"]
+        assert len(environment_nodes) == 1
+        loaded_image = environment_nodes[0].image
+        assert loaded_image is not None
+        assert os.path.abspath(bpy.path.abspath(loaded_image.filepath)) == os.path.abspath(path)
+
+        # The Background input's *link* is what actually drives the shader
+        # once a texture node feeds it -- not just leaving its unused
+        # default_value at whatever it was, so assert the link exists and
+        # comes from this environment node.
+        color_links = background.inputs["Color"].links
+        assert color_links and color_links[0].from_node == environment_nodes[0]
+
+        assert background.inputs["Strength"].default_value == 2.5
+
+    assert scene.world == before_world
+    assert len(bpy.data.worlds) == before_worlds
+    assert len(bpy.data.images) == before_images
+
+
+@check
 def test_view_transform_override_is_applied_and_restored():
     import shutil
 
@@ -953,7 +1039,6 @@ def test_engine_override_resolves_and_restores():
     assert seen_during_render, "render_pre handler never fired"
     assert all(value == resolved for value in seen_during_render), seen_during_render
     assert scene.render.engine == before_engine
-    settings.engine_mode = "SCENE"
 
 
 def main():
