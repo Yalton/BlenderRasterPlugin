@@ -274,6 +274,9 @@ def test_render_writes_individual_frames_and_restores_the_scene():
 
     before_matrix = obj.matrix_world.copy()
     before_engine = scene.render.engine
+    before_res_x = scene.render.resolution_x
+    before_res_y = scene.render.resolution_y
+    before_film_transparent = scene.render.film_transparent
     before_filepath = scene.render.filepath
     before_transform = scene.view_settings.view_transform
 
@@ -285,6 +288,9 @@ def test_render_writes_individual_frames_and_restores_the_scene():
 
     assert (obj.matrix_world.to_translation() - before_matrix.to_translation()).length < 1e-6
     assert scene.render.engine == before_engine
+    assert scene.render.resolution_x == before_res_x
+    assert scene.render.resolution_y == before_res_y
+    assert scene.render.film_transparent == before_film_transparent
     assert scene.render.filepath == before_filepath
     assert scene.view_settings.view_transform == before_transform
 
@@ -313,6 +319,75 @@ def test_render_rejects_a_missing_camera_without_touching_the_scene():
 
     assert scene.render.filepath == before_filepath
     scene.camera = previous_camera
+
+
+@check
+def test_render_restores_the_scene_when_a_frame_fails_mid_loop():
+    import os
+    import shutil
+
+    # Provoke a genuine, organic failure partway through the frame loop --
+    # not a monkeypatch -- by pre-creating the *second* frame's output path
+    # as a directory. Frame 1 renders and writes normally; frame 2's
+    # write_still then fails for real inside bpy.ops.render.render because
+    # it cannot save a PNG where a directory already sits. This exercises
+    # the actual per-operator unwind path (RASTERSHEET_OT_render.run's
+    # scene_snapshot), not just scene_snapshot's own generic exception
+    # handling, which Task 6 already covers.
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+
+    camera_data = bpy.data.cameras.new("ProbeCamFail")
+    camera = bpy.data.objects.new("ProbeCamFail", camera_data)
+    scene.collection.objects.link(camera)
+    camera.location = (0.0, -5.0, 0.0)
+    camera.rotation_euler = (math.radians(90.0), 0.0, 0.0)
+    scene.camera = camera
+
+    out = os.path.join(SCRATCH, "frames_fail_run")
+    shutil.rmtree(out, ignore_errors=True)
+    frames_dir = os.path.join(out, "probe_frames")
+    os.makedirs(frames_dir)
+    os.makedirs(os.path.join(frames_dir, "probe_0002.png"))
+
+    settings = scene.rastersheet
+    settings.frame_count = 4
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 32
+    settings.resolution_y = 32
+    settings.output_dir = out
+    settings.filename_stem = "probe"
+    settings.export_frames = True
+    settings.export_sheet = False
+    settings.export_json = False
+    settings.export_godot = False
+    settings.camera_mode = "CURRENT"
+
+    before_matrix = obj.matrix_world.copy()
+    before_engine = scene.render.engine
+    before_res_x = scene.render.resolution_x
+    before_res_y = scene.render.resolution_y
+    before_film_transparent = scene.render.film_transparent
+    before_filepath = scene.render.filepath
+
+    # The render failure inside the loop makes operator.execute() report an
+    # ERROR and return CANCELLED, which bpy.ops re-raises as a RuntimeError
+    # at the call site -- the same mechanism exercised above for the
+    # missing-camera case.
+    try:
+        result = bpy.ops.rastersheet.render()
+    except RuntimeError as exc:
+        assert "cannot save" in str(exc).lower() or "render" in str(exc).lower(), exc
+    else:
+        raise AssertionError(f"expected the mid-loop render failure to raise, got {result}")
+
+    assert (obj.matrix_world.to_translation() - before_matrix.to_translation()).length < 1e-6
+    assert scene.render.engine == before_engine
+    assert scene.render.resolution_x == before_res_x
+    assert scene.render.resolution_y == before_res_y
+    assert scene.render.film_transparent == before_film_transparent
+    assert scene.render.filepath == before_filepath
 
 
 def main():

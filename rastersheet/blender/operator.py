@@ -38,6 +38,22 @@ def resolution_for(scene, settings):
     )
 
 
+def _writable_ancestor(path):
+    """The nearest existing ancestor of `path` (or `path` itself if it exists).
+
+    Answers "could I create this directory?" without actually creating
+    anything -- validation must never mutate the filesystem, only `run()` is
+    allowed to.
+    """
+    current = os.path.normpath(path)
+    while not os.path.isdir(current):
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return current
+
+
 def validate(context, settings):
     """Return a list of blocking problems. An empty list means go."""
     problems = []
@@ -80,13 +96,9 @@ def validate(context, settings):
         )
 
     output_dir = bpy.path.abspath(settings.output_dir)
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-    except OSError as exc:
-        problems.append(f"Cannot create output directory: {exc}")
-    else:
-        if not os.access(output_dir, os.W_OK):
-            problems.append(f"Output directory is not writable: {output_dir}")
+    writable_target = _writable_ancestor(output_dir)
+    if not os.access(writable_target, os.W_OK):
+        problems.append(f"Output directory is not writable: {output_dir}")
 
     return problems
 
