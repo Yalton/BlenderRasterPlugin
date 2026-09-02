@@ -269,7 +269,15 @@ Captured and restored:
 - `obj.matrix_world` for every target object
 
 Temporary datablocks (camera object, camera data, world) are also removed
-through the stack, so an aborted run leaves no orphans in `bpy.data`.
+through the stack, so an aborted run leaves no orphans in `bpy.data`. A removal
+that fails anyway is reported rather than swallowed silently, since an orphan
+left behind is precisely what this machinery exists to prevent.
+
+Within a group of interdependent attributes the governing one is registered
+**last**, so that LIFO unwinding restores it **first**. `color_depth`'s valid
+values depend on the current `file_format`, and `look`'s on the current
+`view_transform`; restoring a dependent attribute before its governor raises
+`TypeError` and leaves that attribute stranded at its temporary value.
 
 The extension does not parent objects, change origins, apply transforms, delete
 user cameras, insert keyframes, or alter object hierarchy. Frames are rendered
@@ -420,8 +428,8 @@ Defined on a single `RasterSheetSettings` PropertyGroup registered at
 | `rotation_axis` | enum: LOCAL_X/Y/Z, WORLD_X/Y/Z | `LOCAL_Y` |
 | `frame_count` | int, 2..256 | 16 |
 | `clockwise` | bool | True |
-| `start_angle` | float degrees | 0.0 |
-| `sweep_angle` | float degrees | 360.0 |
+| `start_angle` | float, `ANGLE` subtype (stores radians, displays degrees) | 0.0 |
+| `sweep_angle` | float, `ANGLE` subtype (stores radians, displays degrees) | `radians(360)` |
 | `pivot_mode` | enum: ORIGIN, BOUNDS_CENTER | `ORIGIN` |
 | `camera_mode` | enum: CURRENT, AUTO_ORTHO | `CURRENT` |
 | `azimuth` | float degrees | 0.0 |
@@ -615,6 +623,16 @@ ratios.
 - **Studio light filenames** vary between Blender builds, so the Material
   Preview enum must be populated by directory listing and must degrade
   gracefully when the directory is missing.
+- **Angle properties store radians.** Both `start_angle` and `sweep_angle` use
+  Blender's `ANGLE` subtype, so the stored value is radians and the UI shows
+  degrees, matching the mockup's `360°`. Every consumer converts with
+  `math.degrees()` before handing the value to `core.angles`, which takes
+  degrees. Note also that `ANGLE_UNSIGNED` is not a valid `FloatProperty`
+  subtype on 5.2 and raises at registration.
+- **A Python-callback `EnumProperty` reports no `enum_items`.** Introspecting
+  `bl_rna.properties["studio_light"].enum_items` returns an empty sequence even
+  after the callback has run and populated its cache, so a test must read the
+  property and assert against the add-on's own cache instead.
 - **`view_transform` cannot be introspected.** Its `enum_items` reports a
   single `NONE` entry because the values come from the OCIO config at runtime.
   The add-on's own view transform enum is therefore a static list of strings

@@ -778,8 +778,10 @@ class RasterSheetSettings(bpy.types.PropertyGroup):
     )
     frame_count: bpy.props.IntProperty(name="Frames", default=16, min=2, max=256)
     clockwise: bpy.props.BoolProperty(name="Clockwise", default=True)
-    start_angle: bpy.props.FloatProperty(name="Start Angle", default=0.0, subtype="ANGLE_UNSIGNED")
-    sweep_angle: bpy.props.FloatProperty(name="Rotation Amount", default=360.0)
+    start_angle: bpy.props.FloatProperty(name="Start Angle", default=0.0, subtype="ANGLE")
+    sweep_angle: bpy.props.FloatProperty(
+        name="Rotation Amount", default=math.radians(360.0), subtype="ANGLE"
+    )
     pivot_mode: bpy.props.EnumProperty(
         name="Pivot",
         items=[
@@ -1168,9 +1170,13 @@ RENDER_ATTRS = (
     "filepath",
 )
 
-IMAGE_SETTINGS_ATTRS = ("file_format", "color_mode", "color_depth")
+# ExitStack unwinds LIFO, so the governing attribute is registered LAST in
+# order to be restored FIRST. Restoring color_depth while file_format is still
+# the temporary value raises TypeError -- the valid depths depend on the
+# format. Same relationship between look and view_transform.
+IMAGE_SETTINGS_ATTRS = ("color_mode", "color_depth", "file_format")
 
-VIEW_SETTINGS_ATTRS = ("view_transform", "look", "exposure")
+VIEW_SETTINGS_ATTRS = ("exposure", "look", "view_transform")
 
 
 @contextlib.contextmanager
@@ -1516,7 +1522,7 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
             angles = frame_angles(
                 settings.frame_count,
                 math.degrees(settings.start_angle),
-                settings.sweep_angle,
+                math.degrees(settings.sweep_angle),
                 settings.clockwise,
             )
             frame_matrices = [frame_matrix(base_matrix, axis, angle, pivot) for angle in angles]
@@ -2026,7 +2032,7 @@ Then replace everything in `run` from the `with snapshot.scene_snapshot(...)` li
                 angles = frame_angles(
                     settings.frame_count,
                     math.degrees(settings.start_angle),
-                    settings.sweep_angle,
+                    math.degrees(settings.sweep_angle),
                     settings.clockwise,
                 )
                 frame_matrices = [
@@ -3295,7 +3301,7 @@ with:
                     loop=settings.loop,
                     axis=settings.rotation_axis,
                     start_deg=math.degrees(settings.start_angle),
-                    sweep_deg=settings.sweep_angle,
+                    sweep_deg=math.degrees(settings.sweep_angle),
                     clockwise=settings.clockwise,
                 )
                 export_module.write_metadata(paths.json, document)
