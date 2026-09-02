@@ -32,3 +32,33 @@ def test_multiple_of_360_counts_as_a_full_turn():
 def test_count_below_two_is_rejected():
     with pytest.raises(ValueError):
         frame_angles(1, 0.0, 360.0, clockwise=False)
+
+
+def test_float32_rounded_360_is_classified_as_full_turn():
+    # Blender stores as float32: radians(360) becomes 360.00001 on round-trip
+    float32_360 = 360.00001001791264
+    angles = frame_angles(4, 0.0, float32_360, clockwise=False)
+    # Should use full-turn step (360.00001 / 4 ≈ 90.00000) not partial-arc step (360.00001 / 3 ≈ 120)
+    # Verify by checking the step between consecutive frames is ~90 degrees, not ~120
+    step_deg = round(math.degrees(angles[1]), 1)
+    assert step_deg == 90.0, f"Expected step ~90° for full turn, got {step_deg}°"
+
+
+def test_value_slightly_under_multiple_of_360_is_full_turn():
+    # Rounding error can land below the multiple; tolerance should catch it
+    slightly_under_720 = 720.0 - 1e-5
+    angles = frame_angles(4, 0.0, slightly_under_720, clockwise=False)
+    # Should use full-turn step (720 / 4 = 180) not partial-arc step (720 / 3 ≈ 240)
+    step_deg = round(math.degrees(angles[1]), 1)
+    assert step_deg == 180.0, f"Expected step ~180° for full turn, got {step_deg}°"
+
+
+def test_partial_sweep_with_tolerance_still_includes_endpoints():
+    # Partial sweep 359.0 should still be partial arc, not misclassified as full turn
+    assert degrees(frame_angles(4, 0.0, 359.0, clockwise=False)) == [0.0, 119.666667, 239.333333, 359.0]
+
+
+def test_near_zero_sweep_is_not_full_turn():
+    # A very small sweep should not be classified as a full turn
+    # (the tolerance guards against this by requiring sweep > tolerance)
+    assert degrees(frame_angles(2, 0.0, 0.0001, clockwise=False)) == [0.0, 0.0001]
