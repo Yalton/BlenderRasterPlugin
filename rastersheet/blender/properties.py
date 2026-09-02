@@ -1,5 +1,6 @@
 """The add-on's settings, stored on the scene."""
 
+import math
 import os
 
 import bpy
@@ -44,7 +45,9 @@ class RasterSheetSettings(bpy.types.PropertyGroup):
     frame_count: bpy.props.IntProperty(name="Frames", default=16, min=2, max=256)
     clockwise: bpy.props.BoolProperty(name="Clockwise", default=True)
     start_angle: bpy.props.FloatProperty(name="Start Angle", default=0.0, subtype="ANGLE")
-    sweep_angle: bpy.props.FloatProperty(name="Rotation Amount", default=360.0)
+    sweep_angle: bpy.props.FloatProperty(
+        name="Rotation Amount", default=math.radians(360.0), subtype="ANGLE"
+    )
     pivot_mode: bpy.props.EnumProperty(
         name="Pivot",
         items=[
