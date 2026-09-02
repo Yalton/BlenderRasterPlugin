@@ -62,3 +62,24 @@ def test_near_zero_sweep_is_not_full_turn():
     # A very small sweep should not be classified as a full turn
     # (the tolerance guards against this by requiring sweep > tolerance)
     assert degrees(frame_angles(2, 0.0, 0.0001, clockwise=False)) == [0.0, 0.0001]
+
+
+def test_negative_full_turn_does_not_duplicate_the_wrap_frame():
+    # Negative sweep should also be classified as full turn
+    assert degrees(frame_angles(4, 0.0, -360.0, clockwise=False)) == [0.0, -90.0, -180.0, -270.0]
+
+
+def test_negative_multiple_of_360_counts_as_a_full_turn():
+    # Negative sweep that is a multiple of 360 should be full turn
+    assert degrees(frame_angles(4, 0.0, -720.0, clockwise=False)) == [0.0, -180.0, -360.0, -540.0]
+
+
+def test_small_negative_sweep_is_not_full_turn():
+    # A very small negative sweep should not be classified as a full turn
+    # (the magnitude guard prevents near-zero from being full turn)
+    # Small negative value wraps through % 360 to 359.9995, which would trigger
+    # the upper tolerance band if magnitude guard didn't prevent it
+    small_negative = -0.0005
+    angles = frame_angles(2, 0.0, small_negative, clockwise=False)
+    # Should be partial arc: step = -0.0005 / (2 - 1) = -0.0005
+    assert degrees(angles) == [0.0, -0.0005]

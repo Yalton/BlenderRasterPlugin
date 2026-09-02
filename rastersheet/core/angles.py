@@ -35,7 +35,7 @@ def frame_angles(count, start_deg, sweep_deg, clockwise):
     # The remainder can be near 0 or near 360 depending on rounding direction.
     remainder = sweep_deg % 360.0
     is_full_turn = (
-        sweep_deg > _FULL_TURN_TOLERANCE_DEG and (
+        abs(sweep_deg) > _FULL_TURN_TOLERANCE_DEG and (
             remainder <= _FULL_TURN_TOLERANCE_DEG or
             remainder >= 360.0 - _FULL_TURN_TOLERANCE_DEG
         )
