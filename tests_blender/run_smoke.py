@@ -4,8 +4,25 @@ import sys
 import traceback
 
 import bpy
+import mathutils
 
 MODULE = "bl_ext.user_default.rastersheet"
+
+
+def _fresh_cube(name="RasterSheetProbe"):
+    existing = bpy.data.objects.get(name)
+    if existing:
+        bpy.data.objects.remove(existing, do_unlink=True)
+    mesh = bpy.data.meshes.new(f"{name}Mesh")
+    import bmesh
+
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
 
 
 def enable_addon():
@@ -70,6 +87,62 @@ def test_studio_light_enum_is_populated():
     from bl_ext.user_default.rastersheet.blender.properties import _STUDIO_LIGHT_CACHE
 
     assert len(_STUDIO_LIGHT_CACHE) >= 1
+
+
+@check
+def test_snapshot_restores_scalars_and_matrices():
+    from bl_ext.user_default.rastersheet.blender import snapshot
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    before_engine = scene.render.engine
+    before_res = scene.render.resolution_x
+    before_matrix = obj.matrix_world.copy()
+
+    with snapshot.scene_snapshot(scene, [obj]) as stack:
+        snapshot.guard(stack, scene.render, "resolution_x")
+        scene.render.resolution_x = 999
+        obj.matrix_world = obj.matrix_world @ mathutils.Matrix.Translation((10.0, 0.0, 0.0))
+        assert scene.render.resolution_x == 999
+
+    assert scene.render.engine == before_engine
+    assert scene.render.resolution_x == before_res
+    assert (obj.matrix_world.to_translation() - before_matrix.to_translation()).length < 1e-6
+
+
+@check
+def test_snapshot_restores_after_a_failure():
+    from bl_ext.user_default.rastersheet.blender import snapshot
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    before = scene.render.resolution_x
+
+    try:
+        with snapshot.scene_snapshot(scene, [obj]) as stack:
+            snapshot.guard(stack, scene.render, "resolution_x")
+            scene.render.resolution_x = 777
+            raise RuntimeError("deliberate failure")
+    except RuntimeError:
+        pass
+
+    assert scene.render.resolution_x == before
+
+
+@check
+def test_snapshot_removes_tracked_datablocks():
+    from bl_ext.user_default.rastersheet.blender import snapshot
+
+    scene = bpy.context.scene
+    before = len(bpy.data.worlds)
+
+    with snapshot.scene_snapshot(scene, []) as stack:
+        world = bpy.data.worlds.new("rastersheet_temp")
+        snapshot.track_datablock(stack, bpy.data.worlds, world)
+        scene.world = world
+        assert len(bpy.data.worlds) == before + 1
+
+    assert len(bpy.data.worlds) == before
 
 
 def main():
