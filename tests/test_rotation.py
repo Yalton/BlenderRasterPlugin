@@ -46,3 +46,26 @@ def test_zero_angle_reproduces_the_base_matrix():
     result = frame_matrix(base, Vector((0.0, 0.0, 1.0)), 0.0, Vector((0.0, 0.0, 0.0)))
     for row_result, row_base in zip(result, base):
         assert approx(row_result, row_base)
+
+
+def test_operand_order_with_rotated_base_and_nonzero_pivot():
+    # This test discriminates between the correct formula
+    # T(pivot) @ R @ T(-pivot) @ base_matrix and incorrectly swapped orderings.
+    # It uses a rotated base_matrix and non-origin pivot so the two orderings diverge.
+    base = Matrix.Rotation(HALF_TURN_QUARTER, 4, Vector((0.0, 1.0, 0.0)))
+    pivot = Vector((1.0, 0.0, 0.0))
+    axis_world = Vector((0.0, 0.0, 1.0))
+    angle = HALF_TURN_QUARTER
+
+    # Compute expected value using the correct formula verbatim
+    expected = (Matrix.Translation(pivot) @
+                Matrix.Rotation(angle, 4, axis_world) @
+                Matrix.Translation(-pivot) @
+                base)
+
+    # Get result from function
+    result = frame_matrix(base, axis_world, angle, pivot)
+
+    # Verify the full matrices match
+    for row_result, row_expected in zip(result, expected):
+        assert approx(row_result, row_expected)
