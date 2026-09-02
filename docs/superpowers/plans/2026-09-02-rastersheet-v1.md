@@ -1632,7 +1632,7 @@ def test_ragged_last_row_still_places_every_frame():
     layout = sheet_layout(5, 3, "GRID", 10, 10)
     assert layout.rows == 2
     assert len(layout.cells) == 5
-    assert (layout.cells[4].x, layout.cells[4].y) == (0, 10)
+    assert (layout.cells[3].x, layout.cells[3].y) == (0, 10)
 
 
 def test_horizontal_strip_is_one_row():
