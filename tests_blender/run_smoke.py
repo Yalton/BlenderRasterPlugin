@@ -419,6 +419,20 @@ def test_sheet_packing_is_pixel_identical_to_its_frames():
     import shutil
 
     scene = bpy.context.scene
+
+    # The default startup scene ships a "Cube" object sitting at the origin,
+    # exactly coincident with the probe cube _fresh_cube() creates there. It
+    # is never rotated, so if left in place it renders identically into
+    # every frame and silently masks any visual difference the probe's
+    # rotation would otherwise produce (confirmed by direct A/B render: with
+    # this object present, rotating the probe by any angle -- including 50
+    # degrees, nowhere near a cube symmetry -- still produced bit-identical
+    # frames). Remove it so the probe's rotation is what actually gets
+    # rendered.
+    default_cube = bpy.data.objects.get("Cube")
+    if default_cube is not None:
+        bpy.data.objects.remove(default_cube, do_unlink=True)
+
     obj = _fresh_cube()
     bpy.context.view_layer.objects.active = obj
     _ensure_probe_camera(scene)
@@ -427,9 +441,23 @@ def test_sheet_packing_is_pixel_identical_to_its_frames():
     shutil.rmtree(out, ignore_errors=True)
 
     settings = scene.rastersheet
-    settings.frame_count = 2
+    # 4 frames / 2 columns -> 2 rows. A single-row layout has every cell.y
+    # == 0, which makes the sheet_height - cell.y - cell.height flip in
+    # packing.py a no-op and leaves a broken flip undetected.
+    settings.frame_count = 4
     settings.columns = 2
     settings.sheet_mode = "GRID"
+    # A full 360 degree sweep over 4 frames lands on exactly 0/90/180/270
+    # degrees -- and rotating an axis-aligned, uniformly-shaded cube by any
+    # multiple of 90 degrees about a face-normal axis (every axis this
+    # add-on offers is one) is a genuine geometric symmetry: the solid maps
+    # exactly onto itself, so the render is bit-identical regardless of
+    # which of those four angles was used (confirmed by direct A/B render).
+    # A partial, non-90-multiple sweep avoids landing on any of the cube's
+    # symmetry angles, so consecutive frames are guaranteed to look
+    # genuinely different.
+    settings.start_angle = 0.0
+    settings.sweep_angle = math.radians(200.0)
     settings.resolution_mode = "CUSTOM"
     settings.resolution_x = 32
     settings.resolution_y = 32
@@ -444,30 +472,63 @@ def test_sheet_packing_is_pixel_identical_to_its_frames():
     assert bpy.ops.rastersheet.render() == {"FINISHED"}
 
     sheet_path = os.path.join(out, "sheet.png")
-    frame_path = os.path.join(out, "sheet_frames", "sheet_0001.png")
     assert os.path.isfile(sheet_path)
 
     sheet = bpy.data.images.load(sheet_path)
-    frame = bpy.data.images.load(frame_path)
+    frames = [
+        bpy.data.images.load(os.path.join(out, "sheet_frames", f"sheet_{index + 1:04d}.png"))
+        for index in range(4)
+    ]
     try:
-        assert tuple(sheet.size) == (64, 32), tuple(sheet.size)
-        assert sheet.colorspace_settings.name == frame.colorspace_settings.name
+        assert tuple(sheet.size) == (64, 64), tuple(sheet.size)
 
-        sheet_pixels = np.empty(64 * 32 * 4, dtype=np.float32)
+        # Sanity check only: this does NOT verify pack_sheet's colorspace
+        # handling. Both images were just independently reloaded from disk,
+        # so each carries Blender's default colorspace heuristic for a PNG
+        # regardless of what pack_sheet assigned -- it would pass identically
+        # even if the `sheet.colorspace_settings.name = colorspace` line in
+        # packing.py were deleted. The pixel round-trip below, over content
+        # asserted to be non-degenerate, is what actually exercises that.
+        assert sheet.colorspace_settings.name == frames[0].colorspace_settings.name
+
+        sheet_pixels = np.empty(64 * 64 * 4, dtype=np.float32)
         sheet.pixels.foreach_get(sheet_pixels)
-        sheet_pixels = sheet_pixels.reshape(32, 64, 4)
+        sheet_pixels = sheet_pixels.reshape(64, 64, 4)
 
-        frame_pixels = np.empty(32 * 32 * 4, dtype=np.float32)
-        frame.pixels.foreach_get(frame_pixels)
-        frame_pixels = frame_pixels.reshape(32, 32, 4)
+        frame_arrays = []
+        for frame in frames:
+            buffer = np.empty(32 * 32 * 4, dtype=np.float32)
+            frame.pixels.foreach_get(buffer)
+            frame_arrays.append(buffer.reshape(32, 32, 4))
 
-        # Frame 0 occupies the top-left cell, which is the top of the
-        # bottom-up buffer.
-        region = sheet_pixels[0:32, 0:32]
-        assert np.allclose(region, frame_pixels, atol=1e-6), np.abs(region - frame_pixels).max()
+        # A round-trip over degenerate content (flat 0 or flat 1) would pass
+        # regardless of colorspace or flip correctness, since such values map
+        # to themselves under any transform and any row placement. Assert the
+        # probe frame actually carries intermediate values in both colour and
+        # alpha before trusting the comparison below.
+        probe = frame_arrays[2]
+        assert np.any((probe[..., :3] > 1e-3) & (probe[..., :3] < 1 - 1e-3)), \
+            "frame has no intermediate colour values to exercise a real comparison"
+        assert np.any((probe[..., 3] > 1e-3) & (probe[..., 3] < 1 - 1e-3)), \
+            "frame has no intermediate alpha values to exercise a real comparison"
+
+        # Frame index 2 occupies the layout's bottom-left cell (cell.y ==
+        # frame_height, the second row, top-left origin). A correct flip
+        # (sheet_height - cell.y - cell.height) puts it in the LOW index
+        # range of Blender's bottom-up buffer; a no-op flip (bottom =
+        # cell.y) would instead put it in the HIGH range, where frame 0
+        # belongs -- so this discriminates a broken flip.
+        region_2 = sheet_pixels[0:32, 0:32]
+        assert np.allclose(region_2, frame_arrays[2], atol=1e-6), np.abs(region_2 - frame_arrays[2]).max()
+
+        # Frame 0 occupies the top-left cell (first row, cell.y == 0) and
+        # must land in the HIGH index range -- the opposite half.
+        region_0 = sheet_pixels[32:64, 0:32]
+        assert np.allclose(region_0, frame_arrays[0], atol=1e-6), np.abs(region_0 - frame_arrays[0]).max()
     finally:
         bpy.data.images.remove(sheet)
-        bpy.data.images.remove(frame)
+        for frame in frames:
+            bpy.data.images.remove(frame)
 
 
 @check
