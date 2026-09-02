@@ -13,11 +13,37 @@ from ..core.layout import sheet_layout
 from ..core.paths import build_output_paths, frame_filename
 from ..core.rotation import axis_vector, frame_matrix
 from . import camera as camera_module
+from . import lighting as lighting_module
 from . import packing as packing_module
 from . import render as render_module
 from . import snapshot
 
 MAX_SHEET_SIDE = 16384
+
+ENGINE_IDS = {
+    "EEVEE": ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"),
+    "CYCLES": ("CYCLES",),
+}
+
+VIEW_TRANSFORMS = {
+    "STANDARD": "Standard",
+    "AGX": "AgX",
+    "FILMIC": "Filmic",
+}
+
+
+def resolve_engine(scene, mode):
+    """Map the add-on's engine choice onto this build's enum identifier.
+
+    Eevee's identifier changed between 4.2 (BLENDER_EEVEE_NEXT) and 4.5
+    (BLENDER_EEVEE), and Cycles ships as an add-on that can be disabled, so
+    both are resolved against the live enum rather than hardcoded.
+    """
+    available = {item.identifier for item in scene.render.bl_rna.properties["engine"].enum_items}
+    for candidate in ENGINE_IDS[mode]:
+        if candidate in available:
+            return candidate
+    raise RuntimeError(f"{mode.title()} is not available in this Blender build")
 
 
 def local_corners(obj, depsgraph):
@@ -79,10 +105,10 @@ def validate(context, settings):
         problems.append("Non-square pixel aspect ratios are not supported")
 
     if settings.engine_mode != "SCENE":
-        available = {item.identifier for item in scene.render.bl_rna.properties["engine"].enum_items}
-        wanted = {"EEVEE": {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"}, "CYCLES": {"CYCLES"}}[settings.engine_mode]
-        if not (available & wanted):
-            problems.append(f"{settings.engine_mode.title()} is not available in this Blender build")
+        try:
+            resolve_engine(scene, settings.engine_mode)
+        except RuntimeError as exc:
+            problems.append(str(exc))
 
     if settings.lighting_mode == "CUSTOM_HDRI":
         path = bpy.path.abspath(settings.hdri_path)
@@ -186,6 +212,21 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
                 scene.render.image_settings.file_format = "PNG"
                 scene.render.image_settings.color_mode = "RGBA" if settings.transparent else "RGB"
                 scene.render.image_settings.color_depth = "8"
+
+                if settings.engine_mode != "SCENE":
+                    scene.render.engine = resolve_engine(scene, settings.engine_mode)
+
+                if settings.view_transform_mode != "SCENE":
+                    name = VIEW_TRANSFORMS[settings.view_transform_mode]
+                    try:
+                        scene.view_settings.view_transform = name
+                    except TypeError:
+                        self.report(
+                            {"WARNING"},
+                            f"View transform {name!r} is unavailable; keeping the scene's",
+                        )
+
+                lighting_module.apply_lighting(context, settings, stack)
 
                 corners = local_corners(obj, depsgraph)
                 scene.camera = camera_module.resolve_camera(

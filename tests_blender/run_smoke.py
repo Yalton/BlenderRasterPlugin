@@ -755,6 +755,207 @@ def test_auto_ortho_recenters_a_subject_whose_origin_is_off_its_bounds_center():
             bpy.data.images.remove(image)
 
 
+@check
+def test_lighting_modes_all_render_and_restore_the_world():
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    obj.matrix_world = mathutils.Matrix.Identity(4)
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    settings = scene.rastersheet
+    settings.camera_mode = "CURRENT"
+    settings.frame_count = 2
+    settings.columns = 2
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 16
+    settings.resolution_y = 16
+    settings.export_frames = True
+    settings.export_sheet = False
+
+    before_world = scene.world
+    before_worlds = len(bpy.data.worlds)
+
+    for mode in ["MATERIAL_PREVIEW", "SCENE_WORLD", "SCENE_LIGHTS", "FLAT"]:
+        out = os.path.join(SCRATCH, f"light_{mode.lower()}")
+        shutil.rmtree(out, ignore_errors=True)
+        settings.lighting_mode = mode
+        settings.output_dir = out
+        settings.filename_stem = "light"
+        assert bpy.ops.rastersheet.render() == {"FINISHED"}, mode
+        assert os.path.isfile(os.path.join(out, "light_frames", "light_0001.png")), mode
+        assert scene.world == before_world, mode
+        assert len(bpy.data.worlds) == before_worlds, mode
+
+
+@check
+def test_apply_lighting_builds_the_expected_world_per_mode():
+    # The end-to-end check above only proves a file gets written and the
+    # world is restored afterwards -- both true even if apply_lighting were
+    # a no-op, since SCENE_WORLD is already a no-op and a render succeeds
+    # regardless of what lights the scene. This check calls apply_lighting
+    # directly and inspects the temporary world's node values before
+    # unwinding, so it actually distinguishes SCENE_LIGHTS (black
+    # background) from FLAT (white background) from MATERIAL_PREVIEW (an
+    # environment texture, or a white fallback with no bundled studio
+    # light), and confirms SCENE_WORLD builds nothing at all.
+    import contextlib
+
+    from bl_ext.user_default.rastersheet.blender import lighting as lighting_module
+    from bl_ext.user_default.rastersheet.blender import snapshot as snapshot_module
+
+    scene = bpy.context.scene
+    settings = scene.rastersheet
+    before_world = scene.world
+    before_worlds = len(bpy.data.worlds)
+    before_images = len(bpy.data.images)
+
+    with contextlib.ExitStack() as stack:
+        snapshot_module.guard(stack, scene, "world")
+        settings.lighting_mode = "SCENE_WORLD"
+        lighting_module.apply_lighting(bpy.context, settings, stack)
+        assert scene.world == before_world
+        assert len(bpy.data.worlds) == before_worlds
+
+    color_cases = {
+        "SCENE_LIGHTS": lighting_module.BLACK,
+        "FLAT": lighting_module.WHITE,
+    }
+    for mode, expected_color in color_cases.items():
+        with contextlib.ExitStack() as stack:
+            snapshot_module.guard(stack, scene, "world")
+            settings.lighting_mode = mode
+            lighting_module.apply_lighting(bpy.context, settings, stack)
+            world = scene.world
+            assert world != before_world, mode
+            assert len(bpy.data.worlds) == before_worlds + 1, mode
+            background = world.node_tree.nodes["Background"]
+            assert tuple(background.inputs["Color"].default_value) == expected_color, mode
+            assert background.inputs["Strength"].default_value == 1.0, mode
+        assert scene.world == before_world, mode
+        assert len(bpy.data.worlds) == before_worlds, mode
+
+    with contextlib.ExitStack() as stack:
+        snapshot_module.guard(stack, scene, "world")
+        settings.lighting_mode = "MATERIAL_PREVIEW"
+        lighting_module.apply_lighting(bpy.context, settings, stack)
+        world = scene.world
+        assert world != before_world
+        tree = world.node_tree
+        background = tree.nodes["Background"]
+        environment_nodes = [n for n in tree.nodes if n.type == "TEX_ENVIRONMENT"]
+        if settings.studio_light not in {"", "NONE"}:
+            assert environment_nodes, "expected a bundled studio HDRI to attach"
+            assert environment_nodes[0].image is not None
+            assert len(bpy.data.images) == before_images + 1
+        else:
+            assert not environment_nodes
+            assert tuple(background.inputs["Color"].default_value) == lighting_module.WHITE
+    assert scene.world == before_world
+    assert len(bpy.data.worlds) == before_worlds
+    assert len(bpy.data.images) == before_images
+
+
+@check
+def test_view_transform_override_is_applied_and_restored():
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    scene.view_settings.view_transform = "AgX"
+    settings = scene.rastersheet
+    settings.lighting_mode = "FLAT"
+    settings.view_transform_mode = "STANDARD"
+    settings.camera_mode = "CURRENT"
+    settings.frame_count = 2
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 16
+    settings.resolution_y = 16
+    out = os.path.join(SCRATCH, "vt_run")
+    shutil.rmtree(out, ignore_errors=True)
+    settings.output_dir = out
+    settings.filename_stem = "vt"
+    settings.export_frames = True
+    settings.export_sheet = False
+
+    # Asserting only pre- and post-render equality to "AgX" cannot tell "the
+    # override was applied during the render, then restored" apart from
+    # "the override was never applied at all" -- both leave the same before
+    # and after value. A render_pre handler samples the live value at the
+    # moment Blender is actually about to render each frame, which can only
+    # read "Standard" if run() really assigned it.
+    seen_during_render = []
+
+    def _spy(*_args):
+        seen_during_render.append(bpy.context.scene.view_settings.view_transform)
+
+    bpy.app.handlers.render_pre.append(_spy)
+    try:
+        assert bpy.ops.rastersheet.render() == {"FINISHED"}
+    finally:
+        bpy.app.handlers.render_pre.remove(_spy)
+
+    assert seen_during_render, "render_pre handler never fired"
+    assert all(value == "Standard" for value in seen_during_render), seen_during_render
+    assert scene.view_settings.view_transform == "AgX"
+
+
+@check
+def test_engine_override_resolves_and_restores():
+    import shutil
+
+    from bl_ext.user_default.rastersheet.blender import operator as operator_module
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    resolved = operator_module.resolve_engine(scene, "EEVEE")
+    assert resolved in {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"}, resolved
+
+    before_engine = scene.render.engine
+    settings = scene.rastersheet
+    settings.engine_mode = "EEVEE"
+    settings.lighting_mode = "FLAT"
+    settings.camera_mode = "CURRENT"
+    settings.frame_count = 2
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 16
+    settings.resolution_y = 16
+    out = os.path.join(SCRATCH, "engine_run")
+    shutil.rmtree(out, ignore_errors=True)
+    settings.output_dir = out
+    settings.filename_stem = "engine"
+    settings.export_frames = True
+    settings.export_sheet = False
+
+    # Same reasoning as the view-transform check above: sample the live
+    # engine at the moment of each actual render call, not just before and
+    # after, so a deleted assignment (which would leave before == after too)
+    # cannot pass silently.
+    seen_during_render = []
+
+    def _spy(*_args):
+        seen_during_render.append(bpy.context.scene.render.engine)
+
+    bpy.app.handlers.render_pre.append(_spy)
+    try:
+        assert bpy.ops.rastersheet.render() == {"FINISHED"}
+    finally:
+        bpy.app.handlers.render_pre.remove(_spy)
+
+    assert seen_during_render, "render_pre handler never fired"
+    assert all(value == resolved for value in seen_during_render), seen_during_render
+    assert scene.render.engine == before_engine
+    settings.engine_mode = "SCENE"
+
+
 def main():
     enable_addon()
     for fn in CHECKS:
