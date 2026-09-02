@@ -172,8 +172,10 @@ uses, so consumers only need to implement one ordering.
 When *Godot .tres* is enabled, RasterSheet writes `<stem>.tres`: a Godot 4
 `SpriteFrames` resource with one `AtlasTexture` sub-resource per frame,
 all referencing the packed sheet via a single `ext_resource`, plus one
-named animation with a duration array built from the *FPS* and *Loop*
-settings.
+named animation. Each frame entry's `duration` is a fixed `1.0` (Godot
+weights all frames equally within the animation); the *FPS* setting is
+stored as the animation's overall `speed`, and *Loop* is stored as its own
+boolean — the three are separate fields, not a computed duration array.
 
 Copy (or symlink) the sheet PNG and the `.tres` into your Godot project,
 matching the *Godot Prefix* setting to wherever you place them (e.g. a

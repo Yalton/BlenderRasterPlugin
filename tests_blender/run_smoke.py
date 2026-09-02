@@ -1070,6 +1070,14 @@ def test_full_export_writes_sheet_json_and_tres():
     settings.animation_name = "spin"
     settings.fps = 12.0
     settings.loop = True
+    # Distinctive, non-default values: the default clockwise is True, the
+    # default start_angle is 0, and the default sweep_angle is 360 degrees.
+    # If operator.py's math.degrees() calls on start_angle/sweep_angle were
+    # dropped or crossed, these numbers would come out wrong (or in radians)
+    # in a way that a default-valued assertion could not distinguish.
+    settings.clockwise = False
+    settings.start_angle = math.radians(15.0)
+    settings.sweep_angle = math.radians(200.0)
     settings.export_frames = True
     settings.export_sheet = True
     settings.export_json = True
@@ -1087,6 +1095,9 @@ def test_full_export_writes_sheet_json_and_tres():
     assert (document["columns"], document["rows"]) == (2, 2)
     assert (document["sheet_width"], document["sheet_height"]) == (64, 64)
     assert document["rotation"]["axis"] == "LOCAL_Z"
+    assert abs(document["rotation"]["start_angle"] - 15.0) < 1e-3, document["rotation"]
+    assert abs(document["rotation"]["sweep_angle"] - 200.0) < 1e-3, document["rotation"]
+    assert document["rotation"]["clockwise"] is False
 
     with open(os.path.join(out, "full.tres"), encoding="utf-8") as handle:
         tres = handle.read()
@@ -1117,6 +1128,73 @@ def test_godot_export_requires_a_sheet():
         raise AssertionError(f"expected a RuntimeError, got {result}")
     settings.export_godot = False
     settings.export_sheet = True
+
+
+@check
+def test_json_only_export_without_a_sheet():
+    """`layout` is built unconditionally in run(), before the `export_sheet`
+    gate, precisely so this combination works. Before that hoist, `layout`
+    was only bound inside `if settings.export_sheet:`, so building the JSON
+    document here would raise NameError.
+    """
+    import json
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    out = os.path.join(SCRATCH, "json_only_run")
+    shutil.rmtree(out, ignore_errors=True)
+
+    settings = scene.rastersheet
+    settings.camera_mode = "CURRENT"
+    settings.lighting_mode = "FLAT"
+    settings.frame_count = 4
+    settings.columns = 2
+    settings.sheet_mode = "GRID"
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 16
+    settings.resolution_y = 16
+    settings.output_dir = out
+    settings.filename_stem = "jsononly"
+    settings.export_frames = False
+    settings.export_sheet = False
+    settings.export_json = True
+    settings.export_godot = False
+
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+
+    with open(os.path.join(out, "jsononly.json"), encoding="utf-8") as handle:
+        document = json.load(handle)
+    assert document["image"] == "jsononly.png"
+    assert (document["columns"], document["rows"]) == (2, 2)
+    assert (document["sheet_width"], document["sheet_height"]) == (32, 32)
+    assert not os.path.exists(os.path.join(out, "jsononly.png"))
+
+
+@check
+def test_godot_export_requires_a_prefix():
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    settings = scene.rastersheet
+    settings.export_sheet = True
+    settings.export_godot = True
+    settings.godot_res_prefix = "   "
+    # Same bpy.ops quirk noted above: ERROR-level self.report() plus a
+    # {'CANCELLED'} return surfaces as a RuntimeError, not the returned dict.
+    try:
+        result = bpy.ops.rastersheet.render()
+    except RuntimeError as exc:
+        assert "prefix" in str(exc).lower(), exc
+    else:
+        raise AssertionError(f"expected a RuntimeError, got {result}")
+    settings.export_godot = False
+    settings.godot_res_prefix = "res://"
 
 
 def main():

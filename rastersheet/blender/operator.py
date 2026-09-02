@@ -107,6 +107,9 @@ def validate(context, settings):
     if settings.export_godot and not settings.export_sheet:
         problems.append("Godot export needs the sprite sheet enabled")
 
+    if settings.export_godot and not settings.godot_res_prefix.strip():
+        problems.append("Godot export needs a non-empty resource path prefix")
+
     if scene.render.pixel_aspect_x != 1.0 or scene.render.pixel_aspect_y != 1.0:
         problems.append("Non-square pixel aspect ratios are not supported")
 
@@ -180,6 +183,12 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
 
         output_dir = bpy.path.abspath(settings.output_dir)
         paths = build_output_paths(output_dir, settings.filename_stem)
+        # Created unconditionally: the sheet, JSON, and .tres can each be
+        # written independently of whether individual frames are kept, so
+        # output_dir must exist even when export_frames (the only other
+        # thing that used to create it, as a side effect of making
+        # frames_dir inside it) is off.
+        os.makedirs(output_dir, exist_ok=True)
 
         temp_frames_dir = None
         if settings.export_frames:
