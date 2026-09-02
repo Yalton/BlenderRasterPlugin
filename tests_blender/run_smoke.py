@@ -135,14 +135,102 @@ def test_snapshot_removes_tracked_datablocks():
 
     scene = bpy.context.scene
     before = len(bpy.data.worlds)
+    before_world = scene.world
 
     with snapshot.scene_snapshot(scene, []) as stack:
         world = bpy.data.worlds.new("rastersheet_temp")
         snapshot.track_datablock(stack, bpy.data.worlds, world)
         scene.world = world
         assert len(bpy.data.worlds) == before + 1
+        assert scene.world == world
 
     assert len(bpy.data.worlds) == before
+    assert scene.world == before_world
+
+
+@check
+def test_snapshot_restores_image_settings_despite_order_dependency():
+    # Regression test for the ordering bug found in review: file_format
+    # governs which color_depth values are legal. If color_depth is
+    # restored while file_format is still OPEN_EXR, setting a PNG-only
+    # depth like '8' raises TypeError and is never restored. This test
+    # deliberately drives that exact combination.
+    from bl_ext.user_default.rastersheet.blender import snapshot
+
+    scene = bpy.context.scene
+    image_settings = scene.render.image_settings
+    before_format = image_settings.file_format
+    before_depth = image_settings.color_depth
+
+    with snapshot.scene_snapshot(scene, []) as stack:
+        image_settings.file_format = "OPEN_EXR"
+        image_settings.color_depth = "32"
+        assert image_settings.file_format == "OPEN_EXR"
+        assert image_settings.color_depth == "32"
+
+    assert image_settings.file_format == before_format
+    assert image_settings.color_depth == before_depth
+
+
+@check
+def test_snapshot_restores_view_settings():
+    from bl_ext.user_default.rastersheet.blender import snapshot
+
+    scene = bpy.context.scene
+    view_settings = scene.view_settings
+    before_transform = view_settings.view_transform
+    before_look = view_settings.look
+    before_exposure = view_settings.exposure
+
+    with snapshot.scene_snapshot(scene, []) as stack:
+        view_settings.view_transform = "Standard"
+        view_settings.exposure = 2.5
+        assert view_settings.view_transform == "Standard"
+        assert abs(view_settings.exposure - 2.5) < 1e-6
+
+    assert view_settings.view_transform == before_transform
+    assert view_settings.look == before_look
+    assert abs(view_settings.exposure - before_exposure) < 1e-6
+
+
+@check
+def test_snapshot_restores_camera():
+    from bl_ext.user_default.rastersheet.blender import snapshot
+
+    scene = bpy.context.scene
+    before_camera = scene.camera
+
+    with snapshot.scene_snapshot(scene, []) as stack:
+        temp_cam_data = bpy.data.cameras.new("RasterSheetTempCam")
+        snapshot.track_datablock(stack, bpy.data.cameras, temp_cam_data)
+        temp_cam_obj = bpy.data.objects.new("RasterSheetTempCamObj", temp_cam_data)
+        scene.collection.objects.link(temp_cam_obj)
+        snapshot.track_datablock(stack, bpy.data.objects, temp_cam_obj)
+        scene.camera = temp_cam_obj
+        assert scene.camera == temp_cam_obj
+
+    assert scene.camera == before_camera
+
+
+@check
+def test_snapshot_restores_multiple_objects_independently():
+    from bl_ext.user_default.rastersheet.blender import snapshot
+
+    obj_a = _fresh_cube("RasterSheetProbeA")
+    obj_b = _fresh_cube("RasterSheetProbeB")
+    obj_a.matrix_world = mathutils.Matrix.Translation((1.0, 0.0, 0.0))
+    obj_b.matrix_world = mathutils.Matrix.Translation((0.0, 2.0, 0.0))
+    before_a = obj_a.matrix_world.copy()
+    before_b = obj_b.matrix_world.copy()
+
+    with snapshot.scene_snapshot(bpy.context.scene, [obj_a, obj_b]) as stack:
+        obj_a.matrix_world = obj_a.matrix_world @ mathutils.Matrix.Translation((5.0, 0.0, 0.0))
+        obj_b.matrix_world = obj_b.matrix_world @ mathutils.Matrix.Translation((0.0, 5.0, 0.0))
+        assert (obj_a.matrix_world.to_translation() - before_a.to_translation()).length > 1.0
+        assert (obj_b.matrix_world.to_translation() - before_b.to_translation()).length > 1.0
+
+    assert (obj_a.matrix_world.to_translation() - before_a.to_translation()).length < 1e-6
+    assert (obj_b.matrix_world.to_translation() - before_b.to_translation()).length < 1e-6
 
 
 def main():

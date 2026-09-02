@@ -25,8 +25,12 @@ def guard_matrix(stack, obj):
 def _remove(collection, datablock):
     try:
         collection.remove(datablock)
-    except (ReferenceError, RuntimeError):
-        pass
+    except (ReferenceError, RuntimeError) as exc:
+        # A partly-torn-down datablock (already freed, or in a state the
+        # collection refuses to remove) is a legitimate case -- but silently
+        # swallowing it would leave an orphan in bpy.data with no trace, the
+        # exact failure this module exists to prevent. Say so.
+        print(f"rastersheet: failed to remove datablock {datablock!r}: {exc!r}")
 
 
 def track_datablock(stack, collection, datablock):
@@ -43,9 +47,17 @@ RENDER_ATTRS = (
     "filepath",
 )
 
-IMAGE_SETTINGS_ATTRS = ("file_format", "color_mode", "color_depth")
+# ExitStack unwinds LIFO, so whichever attribute is registered *last* here
+# restores *first*. file_format governs which color_mode/color_depth values
+# are legal (e.g. OPEN_EXR allows depth '16'/'32' but not PNG's '8'), and
+# view_transform governs which `look` values are legal -- so the governing
+# attribute goes last in each tuple, on purpose, to restore before its
+# dependents. Reordering these to look "natural" reintroduces a scene-
+# corruption path: restoring a dependent while its governor is still at the
+# temporary value can raise, aborting the unwind with the dependent stuck.
+IMAGE_SETTINGS_ATTRS = ("color_mode", "color_depth", "file_format")
 
-VIEW_SETTINGS_ATTRS = ("view_transform", "look", "exposure")
+VIEW_SETTINGS_ATTRS = ("exposure", "look", "view_transform")
 
 
 @contextlib.contextmanager
