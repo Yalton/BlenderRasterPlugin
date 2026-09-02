@@ -65,6 +65,24 @@ def enable_addon():
     bpy.ops.preferences.addon_enable(module=MODULE)
 
 
+def _reset_settings():
+    """Return every rastersheet setting to its declared default.
+
+    Without this, checks silently inherit whatever the previous check left
+    behind -- there is no other reset anywhere in this runner, and property
+    values on scene.rastersheet persist for the lifetime of the Blender
+    process. property_unset() is Blender's own "go back to the property's
+    declared default" primitive; iterating bl_rna.properties (skipping the
+    handful that are read-only, like rna_type) unsets everything without
+    this function needing to know the property list by name.
+    """
+    settings = bpy.context.scene.rastersheet
+    for prop in settings.bl_rna.properties:
+        if prop.is_readonly:
+            continue
+        settings.property_unset(prop.identifier)
+
+
 CHECKS = []
 
 
@@ -601,15 +619,18 @@ def test_auto_ortho_keeps_the_object_off_the_border_at_every_angle():
     settings.frame_count = 4
     settings.columns = 2
     settings.start_angle = 0.0
-    # The default sweep (360 degrees over 4 frames) steps in exact 90-degree
-    # increments about the cube's own centre on its default LOCAL_Y axis --
-    # a rotational symmetry of a cube, so all four frames render bit-identical
-    # geometry (confirmed by comparing world-space corner sets: they matched
-    # exactly). A sweep whose steps are not multiples of 90 degrees makes the
-    # cube's square cross-section trace a genuinely different (wider,
-    # "diamond") axis-aligned footprint at each angle instead. Verified this
-    # holds for this exact axis/pivot combination -- see the fix report for
-    # task 11 for the corner-set and rendered-pixel diffs.
+    # This test does not set rotation_axis, so it runs on whatever
+    # main()'s per-check reset leaves as the declared default: LOCAL_Y
+    # (verified directly -- see the task 11 fix report). The default sweep
+    # (360 degrees over 4 frames) steps in exact 90-degree increments about
+    # the cube's own centre on that axis -- a rotational symmetry of a
+    # cube, so all four frames rendered bit-identical geometry (confirmed
+    # by comparing world-space corner sets: they matched exactly). A sweep
+    # whose steps are not multiples of 90 degrees makes the cube's square
+    # cross-section trace a genuinely different (wider, "diamond")
+    # axis-aligned footprint at each angle instead. Verified this holds for
+    # this exact axis/pivot combination -- see the fix report for task 11
+    # for the corner-set and rendered-pixel diffs.
     settings.sweep_angle = math.radians(250.0)
     settings.resolution_mode = "CUSTOM"
     settings.resolution_x = 64
@@ -737,6 +758,7 @@ def test_auto_ortho_recenters_a_subject_whose_origin_is_off_its_bounds_center():
 def main():
     enable_addon()
     for fn in CHECKS:
+        _reset_settings()
         fn()
         print(f"  ok  {fn.__name__}")
     print("SMOKE OK")
