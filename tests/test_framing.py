@@ -55,40 +55,80 @@ def test_no_frames_is_rejected():
         required_ortho_scale(UNIT_CUBE, CAMERA, [], 1.0, 1.0)
 
 
-def test_rotated_camera_exercises_inversion_code_path():
-    # Camera rotated 45° around X-axis (tilted forward), positioned at (0, 0, 5).
-    # This test verifies that the inversion code path is exercised.
-    # Note: For a symmetric object centered at origin, the extent measurement is
-    # invariant to inversion (it's an isometry). This test passes with or without
-    # inversion because the mathematical invariant holds. It serves as a regression
-    # test to ensure rotated cameras are handled consistently. Finding asymmetric-
-    # object discrimination of inversion would require non-uniform objects, which
-    # conflict with the UNIT_CUBE fixture design.
-    camera_rotated = Matrix.Translation(Vector((0.0, 0.0, 5.0))) @ Matrix.Rotation(
-        math.radians(45.0), 4, Vector((1.0, 0.0, 0.0))
-    )
-    scale = required_ortho_scale(UNIT_CUBE, camera_rotated, [Matrix.Identity(4)], 1.0, 1.0)
-    # Height extent involves y and z: max(y*cos(45°) + z*sin(45°)) = √2
-    assert abs(scale - math.sqrt(2.0)) < 1e-6
-
-
-def test_per_frame_reduction_not_global_bounding_box():
-    # Two frames with objects at different centers.
-    # Frame 1: identity (object centered at origin).
-    # Frame 2: translated by (2.0, 0.0, 0.0) (object offset in +X).
-    # Per-frame approach: each frame needs scale 1.0. Maximum = 1.0.
-    # Global bounding box approach (wrong): union of all corners is x from -0.5 to 2.5,
-    # y from -0.5 to 0.5. Width = 3.0, height = 1.0. Max = 3.0.
-    # This test ensures the function reduces per-frame, not globally.
+def test_the_union_of_frames_is_covered_not_the_widest_single_frame():
+    # This test previously asserted the opposite (a per-frame maximum of 1.0),
+    # and that expectation was wrong -- do not re-derive it. The fixture is
+    # kept because it is exactly the case where the two formulas disagree:
+    #
+    #   Frame 1: identity            -- cube centred at the origin.
+    #   Frame 2: translated (2, 0, 0) -- the same cube, moved.
+    #
+    # Per-frame maximum: each frame is 1.0 wide on its own, so max = 1.0.
+    # Union: x runs from -0.5 to 2.5, so width = 3.0.
+    #
+    # The union is what must be covered, because `camera.py` places ONE camera
+    # at the centre of the union of all frames and renders every frame through
+    # it. A scale of 1.0 here frames frame 1 and leaves frame 2 entirely
+    # outside the view. The per-frame maximum is only sufficient when every
+    # frame shares a camera-space centre, which is exactly what an orbiting
+    # subject (the default ORIGIN pivot on an off-centre mesh) does not do.
     offset_frame = Matrix.Translation(Vector((2.0, 0.0, 0.0)))
     scale = required_ortho_scale(
         UNIT_CUBE, CAMERA, [Matrix.Identity(4), offset_frame], 1.0, 1.0
     )
-    assert abs(scale - 1.0) < 1e-6
+    assert abs(scale - 3.0) < 1e-6
+
+
+def test_an_orbiting_subject_needs_its_swept_extent():
+    # The defect the union formula fixes, reproduced at the defaults that
+    # trigger it: a unit cube whose mesh is shifted (0.35, 0, 0) in local
+    # space, rotated a full 360 degrees about the object ORIGIN over 8 frames.
+    # The cube orbits rather than spinning in place, so per-frame extents stay
+    # at sqrt(2) while the per-frame centres move; the fixed camera needs
+    # 1.9092. The shortfall is 1.35x, which the default 1.2 margin does not
+    # absorb -- 4 of 8 rendered frames were clipped.
+    offset_cube = [
+        Vector((x + 0.35, y, z))
+        for x in (-0.5, 0.5)
+        for y in (-0.5, 0.5)
+        for z in (-0.5, 0.5)
+    ]
+    frames = [
+        Matrix.Rotation(2.0 * math.pi * index / 8.0, 4, Vector((0.0, 0.0, 1.0)))
+        for index in range(8)
+    ]
+    scale = required_ortho_scale(offset_cube, CAMERA, frames, 1.0, 1.0)
+    assert abs(scale - 1.909188) < 1e-5
+    # Not merely "bigger than one frame": strictly bigger than the widest
+    # single pose, which is what the old formula returned.
+    assert scale > math.sqrt(2.0) + 0.01
+
+
+def test_a_subject_spinning_in_place_costs_nothing():
+    # The union is strictly safer and free in the common case: the swept extent
+    # of a shape rotating about its own centre equals its widest single pose,
+    # so the union returns exactly what the old per-frame maximum returned
+    # (verified bit-identical: 1.4142136573791504 from both formulas).
+    frames = [
+        Matrix.Rotation(2.0 * math.pi * index / 8.0, 4, Vector((0.0, 0.0, 1.0)))
+        for index in range(8)
+    ]
+    union = required_ortho_scale(UNIT_CUBE, CAMERA, frames, 1.0, 1.0)
+    assert abs(union - math.sqrt(2.0)) < 1e-6
+    # And nothing was padded on: the whole sweep costs no more than the single
+    # widest pose in it.
+    assert union == max(
+        required_ortho_scale(UNIT_CUBE, CAMERA, [frame], 1.0, 1.0) for frame in frames
+    )
 
 
 def test_compound_rotation_camera_with_asymmetric_corners_detects_missing_inversion():
     # Compound-rotation camera + asymmetric corners reliably detect missing inversion.
+    # This is the ONLY inversion test in this file. A tilted-camera-plus-symmetric-cube
+    # variant used to sit above it, carrying a comment claiming asymmetric-object
+    # discrimination "would require non-uniform objects"; this test is the
+    # counter-example that disproves that claim, so the inert test was deleted rather
+    # than left in place to have its wrong explanation re-derived.
     # Single-axis rotations on symmetric objects hide the difference (R and R⁻¹ coincide
     # in their axis-aligned effects). Camera translations always cancel (translation
     # shifts all points equally; extent is max - min). Only compound rotations on

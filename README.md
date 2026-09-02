@@ -7,7 +7,7 @@ and frame count, and it will:
 - rotate the object through a sweep of angles, one frame at a time
 - render each angle to a transparent PNG
 - either use the scene's current camera or build a temporary orthographic
-  camera that frames the object automatically
+  camera that frames the whole rotation automatically
 - pack the rendered frames into a single sprite sheet image
 - optionally write a JSON metadata sidecar and/or a Godot `SpriteFrames`
   `.tres` resource
@@ -69,11 +69,18 @@ following boxes, top to bottom:
 **Camera** — *Current Camera* uses whatever camera is already in the
 scene, unmodified. *Auto Orthographic* builds a temporary orthographic
 camera positioned by *Azimuth*, *Elevation*, and *Margin* (extra padding
-around the object), sized so the object stays framed at every rotation
-angle. "Copy View" sets azimuth/elevation from the current 3D viewport.
+around the object). One camera renders every frame, and it is sized to the
+whole rotation at once -- the combined extent of every frame, not just the
+widest one -- so a subject that orbits (which is what rotating about an origin
+that is not inside the mesh does) stays framed at every angle instead of
+swinging out of shot. "Copy From Viewport" sets azimuth/elevation from the
+current 3D viewport.
 
 **Rendering** — *Renderer* selects Eevee, Cycles, or leaves the scene's
-engine untouched. *Lighting* selects a bundled studio HDRI (Material
+engine untouched. Eevee's identifier changed between Blender versions, so the
+right one is chosen from the running version; Cycles is checked against the
+engines actually registered in your build and is only refused when it is
+genuinely disabled. *Lighting* selects a bundled studio HDRI (Material
 Preview), the scene's own world, scene lights only against a black world,
 flat/uniform ambient light, or a custom HDRI file you provide. *View
 Transform* selects the color transform applied to the render (Standard,

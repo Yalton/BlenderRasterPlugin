@@ -363,6 +363,98 @@ def test_render_rejects_a_missing_camera_without_touching_the_scene():
 
 
 @check
+def test_an_unsaved_blend_is_told_what_to_do_about_the_output_directory():
+    # The add-on used to refuse to run at all on an unsaved .blend, with its
+    # own default settings. `bpy.data.filepath` is empty here (this headless
+    # scene has never been saved) and `output_dir` defaults to
+    # "//sprite_output/". `bpy.path.abspath` cannot expand "//" without a
+    # .blend, so it returns the RELATIVE string "sprite_output/"; the
+    # writability walk then bottomed out at "" and `os.access("", os.W_OK)` is
+    # False, so the property's own default value was rejected with "Output
+    # directory is not writable: sprite_output/" -- a false statement, and one
+    # a user cannot act on.
+    #
+    # Note this check calls validate() directly. Going through bpy.ops would
+    # not do: the three rejection checks that run on the default output_dir
+    # substring-match a single keyword in a joined message, so an extra bogus
+    # problem in that message goes unnoticed -- which is how this stayed
+    # hidden.
+    from bl_ext.user_default.rastersheet.blender import operator as operator_module
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+
+    settings = scene.rastersheet
+    assert bpy.data.filepath == "", bpy.data.filepath
+    assert settings.output_dir == "//sprite_output/", settings.output_dir
+    assert bpy.path.abspath(settings.output_dir) == "sprite_output/", bpy.path.abspath(
+        settings.output_dir
+    )
+
+    problems = operator_module.validate(bpy.context, settings)
+    assert len(problems) == 1, problems
+    problem = problems[0]
+    assert "not writable" not in problem, problem
+    assert "saved" in problem and "absolute" in problem, problem
+
+    # The underlying walk: a relative path must terminate at a real directory
+    # rather than at "". This is what made the message wrong in the first
+    # place, and it is separately assertable.
+    ancestor, blocker = operator_module._creation_blocker("no_such_dir/deeper")
+    assert os.path.isdir(ancestor), ancestor
+    assert blocker is None, blocker
+
+    # An absolute output directory is the documented way out, and it works.
+    settings.output_dir = os.path.join(SCRATCH, "unsaved_ok")
+    assert operator_module.validate(bpy.context, settings) == []
+
+
+@check
+def test_a_rejected_run_does_not_create_the_output_directory():
+    # "A rejected run leaves the disk untouched" is a named branch constraint
+    # and nothing else guards it: every other rejection check asserts on scene
+    # state, not on the filesystem. validate() has to answer "could I create
+    # this directory?" by walking up to the nearest existing ancestor, and the
+    # obvious way to answer it -- makedirs and see -- would mutate the disk
+    # before the run has been approved.
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    bpy.context.view_layer.objects.active = obj
+
+    root = os.path.join(SCRATCH, "reject_run")
+    shutil.rmtree(root, ignore_errors=True)
+    os.makedirs(root)
+    # Two levels that do not exist: makedirs(exist_ok=True) would create both.
+    target = os.path.join(root, "never", "created")
+
+    settings = scene.rastersheet
+    settings.output_dir = target
+    settings.camera_mode = "CURRENT"
+    # Reject for an unrelated reason, so the rejection is not itself about the
+    # path: validation still has to inspect output_dir to build the problem
+    # list, and that inspection is what must not touch the disk.
+    previous_camera = scene.camera
+    scene.camera = None
+    try:
+        result = bpy.ops.rastersheet.render()
+    except RuntimeError as exc:
+        assert "camera" in str(exc).lower(), exc
+    else:
+        raise AssertionError(f"expected a RuntimeError, got {result}")
+    finally:
+        scene.camera = previous_camera
+
+    assert not os.path.exists(os.path.join(root, "never")), (
+        "validation created the output directory before the run was approved"
+    )
+    assert os.listdir(root) == [], os.listdir(root)
+
+
+@check
 def test_render_restores_the_scene_when_a_frame_fails_mid_loop():
     import os
     import shutil
@@ -730,11 +822,13 @@ def test_auto_ortho_recenters_a_subject_whose_origin_is_off_its_bounds_center():
     settings.columns = 2
     settings.start_angle = 0.0
     # A small, non-multiple-of-90 sweep: large enough that the object's
-    # off-centre geometry sweeps out a genuinely asymmetric silhouette (so a
-    # missing recentring correction visibly clips), small enough that a
-    # single whole-sheet correction still covers every frame when it IS
-    # applied (this is not a claim that the fix handles arbitrary sweeps --
-    # only that it must handle this one).
+    # off-centre geometry sweeps out a genuinely asymmetric silhouette, so a
+    # missing recentring correction visibly clips. This used to carry a
+    # caveat that it was "not a claim that the fix handles arbitrary sweeps";
+    # that caveat is retired. `core.framing` now sizes the camera to the union
+    # of every frame's camera-space points rather than to the widest single
+    # frame, so arbitrary sweeps ARE handled -- the full-sweep orbit check
+    # below is the one that proves it.
     settings.sweep_angle = math.radians(30.0)
     settings.resolution_mode = "CUSTOM"
     settings.resolution_x = 64
@@ -765,6 +859,94 @@ def test_auto_ortho_recenters_a_subject_whose_origin_is_off_its_bounds_center():
             assert border.max() < 0.01, f"frame {index} touches the border"
         finally:
             bpy.data.images.remove(image)
+
+
+@check
+def test_auto_ortho_covers_a_full_sweep_orbit_on_the_default_pivot():
+    # The defect this check exists for: `core.framing` used to return the
+    # MAXIMUM OF PER-FRAME extents, but `camera.py` places ONE camera at the
+    # centre of the union of all frames. When the subject orbits instead of
+    # spinning in place -- which is exactly what the default ORIGIN pivot does
+    # to any mesh that is not centred on its object origin -- per-frame extents
+    # stay small while the per-frame centres move, and the fixed camera cannot
+    # cover the orbit. At these settings the per-frame maximum was 1.4142 where
+    # 1.9092 was needed: a 1.35x shortfall, which the default 1.2 margin does
+    # not absorb, and 4 of these 8 frames rendered clipped.
+    #
+    # Everything here is the property default except the frame count and the
+    # resolution: ORIGIN pivot, a full 360-degree sweep, margin 1.2.
+    import numpy as np
+    import shutil
+    import bmesh
+
+    scene = bpy.context.scene
+    name = "RasterSheetOrbitProbe"
+    existing = bpy.data.objects.get(name)
+    if existing:
+        bpy.data.objects.remove(existing, do_unlink=True)
+    mesh = bpy.data.meshes.new(f"{name}Mesh")
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new(name, mesh)
+    scene.collection.objects.link(obj)
+    # Shift the mesh data, not the object: the object's origin stays at local
+    # (0, 0, 0) while its geometry sits 0.35 away from it, so an ORIGIN-pivot
+    # rotation swings the geometry around a circle of radius 0.35.
+    obj.data.transform(mathutils.Matrix.Translation((0.35, 0.0, 0.0)))
+    # A location no other probe in this suite uses: the auto camera frames the
+    # active object tightly, and any leftover probe inside that frame would
+    # render into it and corrupt the border assertion below.
+    obj.matrix_world = mathutils.Matrix.Translation((60.0, -35.0, 15.0))
+    bpy.context.view_layer.objects.active = obj
+
+    out = os.path.join(SCRATCH, "ortho_orbit_run")
+    shutil.rmtree(out, ignore_errors=True)
+
+    settings = scene.rastersheet
+    settings.camera_mode = "AUTO_ORTHO"
+    settings.azimuth = 0.0
+    settings.elevation = 30.0
+    settings.camera_margin = 1.2  # the declared default, stated for the record
+    settings.pivot_mode = "ORIGIN"  # the declared default, stated for the record
+    settings.rotation_axis = "WORLD_Z"
+    settings.frame_count = 8
+    settings.columns = 4
+    settings.start_angle = 0.0
+    settings.sweep_angle = math.radians(360.0)  # the declared default
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 64
+    settings.resolution_y = 64
+    settings.output_dir = out
+    settings.filename_stem = "orbit"
+    settings.export_frames = True
+    settings.export_sheet = False
+    settings.transparent = True
+
+    before_camera = scene.camera
+    before_cameras = len(bpy.data.cameras)
+
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+
+    assert scene.camera == before_camera
+    assert len(bpy.data.cameras) == before_cameras
+
+    clipped = []
+    for index in range(1, 9):
+        path = os.path.join(out, "orbit_frames", f"orbit_{index:04d}.png")
+        image = bpy.data.images.load(path)
+        try:
+            pixels = np.empty(64 * 64 * 4, dtype=np.float32)
+            image.pixels.foreach_get(pixels)
+            alpha = pixels.reshape(64, 64, 4)[:, :, 3]
+            assert alpha.max() > 0.5, f"frame {index} is empty"
+            border = np.concatenate([alpha[0, :], alpha[-1, :], alpha[:, 0], alpha[:, -1]])
+            if border.max() >= 0.01:
+                clipped.append(index)
+        finally:
+            bpy.data.images.remove(image)
+    assert not clipped, f"frames clipped by the frame border: {clipped}"
 
 
 @check
@@ -993,6 +1175,19 @@ def test_view_transform_override_is_applied_and_restored():
 
 @check
 def test_engine_override_resolves_and_restores():
+    # This check used to be inert. Every assertion compared against `resolved`
+    # or `before_engine`, and on this build both were BLENDER_EEVEE -- the
+    # engine the scene already had -- so deleting run()'s assignment entirely
+    # left it green (proven by running its body with the assignment skipped).
+    #
+    # The render_pre spy is necessary but not sufficient: it only defeats
+    # before/after blindness when the BEFORE value differs from the expected
+    # one. What makes this check discriminate is the line below, which parks
+    # the scene on a third engine -- BLENDER_WORKBENCH, registered in every
+    # build and never what resolve_engine() returns -- so the spy can only
+    # read the resolved engine if run() really assigned it, and the
+    # restoration assertion can only hold if the snapshot really put
+    # Workbench back.
     import shutil
 
     from bl_ext.user_default.rastersheet.blender import operator as operator_module
@@ -1002,43 +1197,67 @@ def test_engine_override_resolves_and_restores():
     bpy.context.view_layer.objects.active = obj
     _ensure_probe_camera(scene)
 
-    resolved = operator_module.resolve_engine(scene, "EEVEE")
-    assert resolved in {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"}, resolved
+    # Cycles is the branch that shipped dead: resolve_engine() used to read
+    # scene.render.bl_rna.properties["engine"].enum_items, a compile-time RNA
+    # stub that lists neither CYCLES nor BLENDER_WORKBENCH even though both
+    # assign successfully, so validation rejected Cycles with a false claim
+    # that the build lacked it. Both branches are exercised here so it cannot
+    # ship dead again.
+    expected = {
+        "EEVEE": operator_module.resolve_engine(scene, "EEVEE"),
+        "CYCLES": operator_module.resolve_engine(scene, "CYCLES"),
+    }
+    assert expected["EEVEE"] in {"BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"}, expected
+    assert expected["CYCLES"] == "CYCLES", expected
 
-    before_engine = scene.render.engine
     settings = scene.rastersheet
-    settings.engine_mode = "EEVEE"
     settings.lighting_mode = "FLAT"
     settings.camera_mode = "CURRENT"
     settings.frame_count = 2
     settings.resolution_mode = "CUSTOM"
     settings.resolution_x = 16
     settings.resolution_y = 16
-    out = os.path.join(SCRATCH, "engine_run")
-    shutil.rmtree(out, ignore_errors=True)
-    settings.output_dir = out
-    settings.filename_stem = "engine"
     settings.export_frames = True
     settings.export_sheet = False
+    # Cycles' default sample count would make this check take minutes at any
+    # resolution; one sample is enough to prove which engine rendered.
+    scene.cycles.samples = 1
 
-    # Same reasoning as the view-transform check above: sample the live
-    # engine at the moment of each actual render call, not just before and
-    # after, so a deleted assignment (which would leave before == after too)
-    # cannot pass silently.
-    seen_during_render = []
+    for mode, resolved in sorted(expected.items()):
+        out = os.path.join(SCRATCH, f"engine_run_{mode.lower()}")
+        shutil.rmtree(out, ignore_errors=True)
+        settings.output_dir = out
+        settings.filename_stem = "engine"
+        settings.engine_mode = mode
 
-    def _spy(*_args):
-        seen_during_render.append(bpy.context.scene.render.engine)
+        # A third engine, distinct from both the scene default and every
+        # value resolve_engine() can return. Without it, "the override was
+        # applied and restored" and "the override was never applied" are
+        # indistinguishable.
+        scene.render.engine = "BLENDER_WORKBENCH"
+        before_engine = scene.render.engine
+        assert before_engine != resolved, (before_engine, resolved)
 
-    bpy.app.handlers.render_pre.append(_spy)
-    try:
-        assert bpy.ops.rastersheet.render() == {"FINISHED"}
-    finally:
-        bpy.app.handlers.render_pre.remove(_spy)
+        # Sample the live engine at the moment of each actual render call,
+        # not just before and after.
+        seen_during_render = []
 
-    assert seen_during_render, "render_pre handler never fired"
-    assert all(value == resolved for value in seen_during_render), seen_during_render
-    assert scene.render.engine == before_engine
+        def _spy(*_args):
+            seen_during_render.append(bpy.context.scene.render.engine)
+
+        bpy.app.handlers.render_pre.append(_spy)
+        try:
+            assert bpy.ops.rastersheet.render() == {"FINISHED"}, mode
+        finally:
+            bpy.app.handlers.render_pre.remove(_spy)
+
+        assert seen_during_render, f"render_pre handler never fired for {mode}"
+        assert all(value == resolved for value in seen_during_render), (
+            mode,
+            seen_during_render,
+        )
+        assert scene.render.engine == before_engine, (mode, scene.render.engine)
+        assert os.path.exists(os.path.join(out, "engine_frames", "engine_0001.png")), mode
 
 
 @check
@@ -1082,9 +1301,12 @@ def test_full_export_writes_sheet_json_and_tres():
     settings.export_sheet = True
     settings.export_json = True
     settings.export_godot = True
-    # No trailing slash: the assertion below is only true if the operator
-    # normalizes the prefix before joining it to the sheet's filename.
-    settings.godot_res_prefix = "res://sprites"
+    # No trailing slash, and padded with whitespace: the assertion below is
+    # only true if the operator normalizes the prefix before joining it to the
+    # sheet's filename. validate() tests `godot_res_prefix.strip()`, so this
+    # value is ACCEPTED -- run() used to then use the unstripped value and bake
+    # the padding into the resource path.
+    settings.godot_res_prefix = "  res://sprites  "
 
     assert bpy.ops.rastersheet.render() == {"FINISHED"}
 
@@ -1101,7 +1323,7 @@ def test_full_export_writes_sheet_json_and_tres():
 
     with open(os.path.join(out, "full.tres"), encoding="utf-8") as handle:
         tres = handle.read()
-    assert 'path="res://sprites/full.png"' in tres
+    assert 'path="res://sprites/full.png"' in tres, tres.splitlines()[2]
     assert "load_steps=6" in tres
     assert tres.count("AtlasTexture_") == 8  # one declaration and one reference each
 
@@ -1126,8 +1348,6 @@ def test_godot_export_requires_a_sheet():
         assert "sheet" in str(exc).lower(), exc
     else:
         raise AssertionError(f"expected a RuntimeError, got {result}")
-    settings.export_godot = False
-    settings.export_sheet = True
 
 
 @check
@@ -1193,8 +1413,6 @@ def test_godot_export_requires_a_prefix():
         assert "prefix" in str(exc).lower(), exc
     else:
         raise AssertionError(f"expected a RuntimeError, got {result}")
-    settings.export_godot = False
-    settings.godot_res_prefix = "res://"
 
 
 def main():

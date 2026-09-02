@@ -181,18 +181,34 @@ by `camera_matrix.inverted()` and reduced to a width and a height. Passing
 world-space corners here would apply the base transform twice.
 
 The temporary camera sets `sensor_fit = 'HORIZONTAL'`, so `ortho_scale` is
-unambiguously the horizontal extent of the view in world units. The needed
-horizontal extent for one frame is therefore:
+unambiguously the horizontal extent of the view in world units. The width and
+height are measured over the **union of every frame's camera-space points**,
+and the needed horizontal extent is:
 
 ```
 needed = max(width, height * aspect)
 ```
 
-with `aspect = resolution_x / resolution_y`. The returned value is the maximum
-`needed` across every frame, multiplied by `margin`.
+with `aspect = resolution_x / resolution_y`. The returned value is `needed`
+multiplied by `margin`.
 
 One scale is computed for the entire sheet. A per-frame scale would make the
 sprite visibly pump in size as it rotates.
+
+The union, not a maximum of per-frame extents. An earlier revision of this
+document specified the per-frame maximum and that was wrong: `camera.py`
+places **one** camera at the centre of the union of all frames and renders
+every frame through it, so the union is what that camera has to cover. When
+the subject *orbits* rather than spinning in place -- which is what the default
+`ORIGIN` pivot does to any mesh not centred on its object origin -- the
+per-frame extents stay small while the per-frame centres move, and the fixed
+camera clips. Measured case: a unit cube whose mesh is shifted `(0.35, 0, 0)`,
+default pivot, 360 degrees over 8 frames, margin 1.2 -- per-frame maximum
+1.4142 against a union requirement of 1.9092, a 1.35x shortfall the margin
+does not absorb, and 4 of the 8 frames rendered clipped. The two formulas are
+bit-identical for a subject rotating about its own centre, because the swept
+extent of a shape about its own centre equals its widest single pose, so the
+union costs nothing in the common case.
 
 This differs from section 7 of the brief, which computed a required vertical
 extent. The two are equivalent; fixing `sensor_fit` removes the ambiguity in
@@ -288,15 +304,26 @@ system.
 
 The Eevee enum identifier changed across the supported version range:
 `BLENDER_EEVEE_NEXT` in 4.2, `BLENDER_EEVEE` in 4.5 and later. The correct
-value is resolved at runtime by inspecting
+value is selected from `bpy.app.version`: `>= (4, 5, 0)` gives `BLENDER_EEVEE`,
+anything earlier gives `BLENDER_EEVEE_NEXT`. Eevee is built in and always
+registered, so its availability is never in question -- only its name.
 
-```python
-scene.render.bl_rna.properties['engine'].enum_items
-```
+Cycles is `CYCLES` throughout, but it is a Python-registered engine and can be
+absent, so it is looked up in the live registration table: walk
+`bpy.types.RenderEngine.__subclasses__()` recursively and collect
+`getattr(cls, "bl_idname", None)`. The recursion and the `getattr` are both
+load-bearing -- `HydraRenderEngine` is a subclass with no `bl_idname` at all,
+and a concrete engine can sit under an intermediate base. Selecting an engine
+that is unavailable in the running build is a pre-flight failure, not a crash
+mid-render.
 
-and preferring `BLENDER_EEVEE`, falling back to `BLENDER_EEVEE_NEXT`. Cycles is
-`CYCLES` throughout. Selecting an engine that is unavailable in the running
-build is a pre-flight failure, not a crash mid-render.
+**Do not resolve either one against
+`scene.render.bl_rna.properties['engine'].enum_items`.** An earlier revision of
+this document specified exactly that, and it is wrong: that collection is the
+static RNA stub declared at compile time, not the engines registered in the
+running build. On 5.2 it reports only `['BLENDER_EEVEE']` while the property
+genuinely accepts `('BLENDER_EEVEE', 'BLENDER_WORKBENCH', 'CYCLES')`. The tell
+is that Workbench is missing from it too, and Workbench ships in every build.
 
 ### 5.3 Camera
 
@@ -550,7 +577,9 @@ mutation.
   off-origin object and asserting its bounds center is stationary.
 - `framing`: a unit cube viewed down an axis and rotated 45 degrees requires a
   scale of `sqrt(2)`; margin and aspect are applied correctly; the returned
-  scale is the maximum across frames, not the last one.
+  scale covers the union of all frames, not the widest single frame (an
+  orbiting subject needs its whole swept extent), and a subject spinning in
+  place costs no more than its widest pose.
 - `layout`: grid, horizontal, and vertical modes; a ragged final row; cell
   rectangles tile without overlap or gaps.
 - `metadata`: the exact document in section 8.
@@ -579,7 +608,17 @@ Assertions:
 - A deliberately failing run (an unwritable output path) still restores
   everything. This is the case the ExitStack design exists for.
 - Auto Orthographic framing keeps the object inside the frame at every angle:
-  sampled frames have no non-transparent pixels touching the border.
+  sampled frames have no non-transparent pixels touching the border. Covered
+  for a subject spinning in place, for one whose origin is off its bounds
+  centre, and for a full 360-degree orbit on the default `ORIGIN` pivot -- the
+  case the per-frame framing formula clipped.
+- Pre-flight is actionable on an unsaved `.blend`: `output_dir`'s own default
+  is `//sprite_output/`, which `bpy.path.abspath` cannot expand without a
+  saved file, and the run must not be refused as "not writable".
+- A rejected run creates nothing on disk: validation is non-mutating.
+- The engine override is applied and restored for **both** Eevee and Cycles,
+  with the scene parked on a third engine (`BLENDER_WORKBENCH`) first so that
+  "applied then restored" is distinguishable from "never applied".
 
 The runner writes its output to a log file and the harness echoes `$?`. Piping
 the run through `tail` would return `tail`'s exit code and mask a failure.
@@ -639,11 +678,18 @@ ratios.
   and assignment is wrapped in `try`/`except`. Verified on 5.2: `Standard`,
   `AgX`, `Filmic`, and `Khronos PBR Neutral` all assign successfully, and the
   factory default is `AgX`.
-- **Cycles may be absent** from `render.engine`'s enum, because it ships as an
-  add-on that can be disabled. A headless 5.2 run with `--factory-startup`
-  reports only `BLENDER_EEVEE`. Pre-flight must treat a missing engine as a
-  validation failure.
+- **`render.engine`'s `enum_items` is a compile-time stub, not an
+  availability list.** A headless 5.2 run with `--factory-startup` reports only
+  `['BLENDER_EEVEE']` from it, yet assigning `CYCLES` or `BLENDER_WORKBENCH`
+  succeeds, and Cycles is registered under `--factory-startup`. Workbench being
+  missing from the same list is the tell. Availability must be read from the
+  registration table (`bpy.types.RenderEngine.__subclasses__()`), never from
+  that enum. Cycles genuinely can be disabled, and pre-flight must treat a
+  missing engine as a validation failure -- but only when it is actually
+  missing.
 - **Eevee's enum identifier** differs across the supported version range, so it
-  is resolved at runtime.
+  is chosen from `bpy.app.version` at runtime. Resolving it from the enum stub
+  would return a compile-time constant, and on 4.2 that means assigning an
+  identifier the running build does not have, raising `TypeError` mid-run.
 - **Large sheets** allocate substantial float buffers. Bounded by the 16384
   pixel pre-flight limit.

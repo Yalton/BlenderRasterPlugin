@@ -23,10 +23,9 @@ from . import snapshot
 
 MAX_SHEET_SIDE = 16384
 
-ENGINE_IDS = {
-    "EEVEE": ("BLENDER_EEVEE", "BLENDER_EEVEE_NEXT"),
-    "CYCLES": ("CYCLES",),
-}
+# Eevee's enum identifier changed mid-range: BLENDER_EEVEE_NEXT in 4.2/4.3,
+# BLENDER_EEVEE from 4.5 on.
+EEVEE_RENAMED_IN = (4, 5, 0)
 
 VIEW_TRANSFORMS = {
     "STANDARD": "Standard",
@@ -35,18 +34,54 @@ VIEW_TRANSFORMS = {
 }
 
 
-def resolve_engine(scene, mode):
-    """Map the add-on's engine choice onto this build's enum identifier.
+def registered_engine_ids():
+    """Every engine identifier registered in the *running* build.
 
-    Eevee's identifier changed between 4.2 (BLENDER_EEVEE_NEXT) and 4.5
-    (BLENDER_EEVEE), and Cycles ships as an add-on that can be disabled, so
-    both are resolved against the live enum rather than hardcoded.
+    `scene.render.bl_rna.properties["engine"].enum_items` cannot answer this:
+    it returns the static RNA stub declared at compile time, which on 5.2
+    lists only BLENDER_EEVEE -- Workbench is missing from it too, and
+    Workbench ships in every build. Assigning "CYCLES" or "BLENDER_WORKBENCH"
+    to that same property succeeds regardless, so the stub is not a statement
+    about availability.
+
+    The registration table itself is the truth: engines implemented in Python
+    (Cycles among them) register as subclasses of bpy.types.RenderEngine.
+    Some subclasses -- HydraRenderEngine is the one in this build -- are
+    abstract bases with no bl_idname, so read it defensively and recurse,
+    because a concrete engine can sit under an intermediate base.
     """
-    available = {item.identifier for item in scene.render.bl_rna.properties["engine"].enum_items}
-    for candidate in ENGINE_IDS[mode]:
-        if candidate in available:
-            return candidate
-    raise RuntimeError(f"{mode.title()} is not available in this Blender build")
+    found = set()
+
+    def walk(cls):
+        for subclass in cls.__subclasses__():
+            identifier = getattr(subclass, "bl_idname", None)
+            if identifier:
+                found.add(identifier)
+            walk(subclass)
+
+    walk(bpy.types.RenderEngine)
+    return found
+
+
+def resolve_engine(scene, mode):
+    """Map the add-on's engine choice onto this build's engine identifier.
+
+    `scene` is unused but kept in the signature: every call site passes it,
+    and a future build could make availability scene-dependent.
+
+    Both branches read the running build, never a compile-time constant.
+    Eevee is built in and always present, so only its *name* is in question
+    and `bpy.app.version` settles it. Cycles genuinely can be absent (it is a
+    Python-registered engine and can be disabled), so it is looked up in the
+    live registration table.
+    """
+    if mode == "EEVEE":
+        return "BLENDER_EEVEE" if bpy.app.version >= EEVEE_RENAMED_IN else "BLENDER_EEVEE_NEXT"
+    if mode == "CYCLES":
+        if "CYCLES" in registered_engine_ids():
+            return "CYCLES"
+        raise RuntimeError("Cycles is not available in this Blender build")
+    raise RuntimeError(f"Unknown engine mode {mode!r}")
 
 
 def local_corners(obj, depsgraph):
@@ -71,20 +106,47 @@ def resolution_for(scene, settings):
     )
 
 
-def _writable_ancestor(path):
-    """The nearest existing ancestor of `path` (or `path` itself if it exists).
+def resolved_output_dir(settings):
+    """The absolute filesystem path `settings.output_dir` names.
+
+    `core.paths` documents that `output_dir` must already be absolute when it
+    arrives, and this is the boundary that has to honour that. `bpy.path.abspath`
+    only expands the `//` prefix, and when the .blend has never been saved it
+    cannot expand it at all -- it hands back a *relative* string. os.path.abspath
+    finishes the job so everything downstream sees one real path.
+    """
+    return os.path.abspath(bpy.path.abspath(settings.output_dir))
+
+
+def _creation_blocker(path):
+    """Walk up to the nearest existing directory, reporting what blocks creation.
+
+    Returns `(ancestor, blocker)`: `ancestor` is the nearest existing directory
+    at or above `path`, and `blocker` is an existing *non*-directory component
+    on the way up, if any -- `os.makedirs` will fail on that later in `run()`,
+    so validation says so up front instead.
+
+    `path` must be absolute. A relative path bottoms this walk out at `""`,
+    and `os.access("", os.W_OK)` is False, which is how the default
+    `//sprite_output/` used to fail validation on an unsaved .blend.
 
     Answers "could I create this directory?" without actually creating
     anything -- validation must never mutate the filesystem, only `run()` is
     allowed to.
     """
-    current = os.path.normpath(path)
+    current = os.path.abspath(path)
+    blocker = None
     while not os.path.isdir(current):
+        if os.path.exists(current):
+            # A regular file (or anything else that is not a directory) sitting
+            # where a path component has to be. The highest such component is
+            # the one that actually stops makedirs, so keep overwriting.
+            blocker = current
         parent = os.path.dirname(current)
         if parent == current:
             break
         current = parent
-    return current
+    return current, blocker
 
 
 def validate(context, settings):
@@ -133,10 +195,24 @@ def validate(context, settings):
                 f"over Blender's {MAX_SHEET_SIDE}px limit"
             )
 
-    output_dir = bpy.path.abspath(settings.output_dir)
-    writable_target = _writable_ancestor(output_dir)
-    if not os.access(writable_target, os.W_OK):
-        problems.append(f"Output directory is not writable: {output_dir}")
+    if not bpy.data.filepath and settings.output_dir.startswith("//"):
+        # `//` means "relative to the .blend", and there is no .blend yet, so
+        # there is no directory to talk about -- including for the property's
+        # own default of `//sprite_output/`. Say what to do about it rather
+        # than reporting the unexpanded string as unwritable.
+        problems.append(
+            "Output directory is relative to the .blend file, which has not been "
+            "saved yet: save the .blend first, or set an absolute output directory"
+        )
+    else:
+        output_dir = resolved_output_dir(settings)
+        ancestor, blocker = _creation_blocker(output_dir)
+        if blocker is not None:
+            problems.append(
+                f"Output directory cannot be created: {blocker} is a file, not a directory"
+            )
+        elif not os.access(ancestor, os.W_OK):
+            problems.append(f"Output directory is not writable: {output_dir}")
 
     return problems
 
@@ -181,7 +257,7 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
         obj = context.active_object
         window_manager = context.window_manager
 
-        output_dir = bpy.path.abspath(settings.output_dir)
+        output_dir = resolved_output_dir(settings)
         paths = build_output_paths(output_dir, settings.filename_stem)
         # Created unconditionally: the sheet, JSON, and .tres can each be
         # written independently of whether individual frames are kept, so
@@ -290,7 +366,11 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
                 export_module.write_metadata(paths.json, document)
 
             if settings.export_godot:
-                prefix = settings.godot_res_prefix
+                # validate() tests `godot_res_prefix.strip()`, so a
+                # whitespace-padded prefix is accepted; strip it here too or
+                # the accepted value and the used value differ and "  res://x  "
+                # bakes its padding into the resource path.
+                prefix = settings.godot_res_prefix.strip()
                 if prefix and not prefix.endswith("/"):
                     prefix += "/"
                 text = sprite_frames_tres(

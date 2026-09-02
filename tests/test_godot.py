@@ -48,3 +48,30 @@ def test_regions_follow_the_layout_cells():
     assert "region = Rect2(10, 0, 10, 20)" in text
     assert "region = Rect2(0, 20, 10, 20)" in text
     assert "region = Rect2(10, 20, 10, 20)" in text
+
+
+def test_a_quote_in_the_animation_name_is_escaped():
+    # animation_name is free text straight from the panel -- unlike
+    # filename_stem, nothing sanitizes it. An unescaped `"` closes the string
+    # literal early and Godot rejects the whole resource, silently as far as
+    # the add-on is concerned.
+    layout = sheet_layout(2, 2, "GRID", 8, 8)
+    text = sprite_frames_tres("res://a.png", layout, 'sp"in', 12.0, True)
+    assert '"name": &"sp\\"in",' in text
+    # And the literal is still closed exactly once: an unescaped quote would
+    # leave a bare `"` inside it.
+    assert 'sp"in' not in text.replace('\\"', "")
+
+
+def test_a_backslash_in_the_texture_path_is_escaped():
+    # The texture path is godot_res_prefix (user-typed) joined to the stem, so
+    # a Windows-style separator reaches it unsanitized.
+    layout = sheet_layout(2, 2, "GRID", 8, 8)
+    text = sprite_frames_tres("res://sprites\\a.png", layout, "spin", 12.0, True)
+    assert 'path="res://sprites\\\\a.png"' in text
+
+
+def test_escaping_leaves_ordinary_names_untouched():
+    layout = sheet_layout(2, 2, "GRID", 32, 32)
+    text = sprite_frames_tres("res://probe.png", layout, "spin", 12.0, True)
+    assert text == EXPECTED_TWO_FRAMES

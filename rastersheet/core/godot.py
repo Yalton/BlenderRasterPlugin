@@ -6,12 +6,24 @@ One AtlasTexture sub-resource per frame, all pointing at the same sheet.
 TEXTURE_ID = "1_tex"
 
 
+def _quoted(value):
+    """Escape a value for a double-quoted Godot .tres string literal.
+
+    `filename_stem` is sanitized upstream, but `animation_name` is free text
+    and the resource prefix is a user-typed path: a bare `"` or `\\` in either
+    ends the literal early and produces a .tres Godot refuses to parse, with
+    nothing in the add-on's output saying so. Backslash first, or it would
+    re-escape the backslashes the quote escaping just introduced.
+    """
+    return str(value).replace("\\", "\\\\").replace('"', '\\"')
+
+
 def sprite_frames_tres(image_res_path, layout, animation_name, fps, loop):
     count = len(layout.cells)
     lines = [
         f'[gd_resource type="SpriteFrames" load_steps={count + 2} format=3]',
         "",
-        f'[ext_resource type="Texture2D" path="{image_res_path}" id="{TEXTURE_ID}"]',
+        f'[ext_resource type="Texture2D" path="{_quoted(image_res_path)}" id="{TEXTURE_ID}"]',
         "",
     ]
 
@@ -35,7 +47,7 @@ def sprite_frames_tres(image_res_path, layout, animation_name, fps, loop):
             "animations = [{",
             f'"frames": [{frames}],',
             f'"loop": {"true" if loop else "false"},',
-            f'"name": &"{animation_name}",',
+            f'"name": &"{_quoted(animation_name)}",',
             f'"speed": {fps}',
             "}]",
             "",
