@@ -1,0 +1,12 @@
+schema_version = "1.0.0"
+id = "rastersheet"
+version = "0.1.0"
+name = "RasterSheet"
+tagline = "Render a rotating object into a sprite sheet"
+maintainer = "Dalton Bailey <daltipolous@gmail.com>"
+type = "add-on"
+blender_version_min = "4.2.0"
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Write rendered frames, sprite sheets, and metadata"
