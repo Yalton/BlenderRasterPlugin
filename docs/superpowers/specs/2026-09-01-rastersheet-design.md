@@ -66,6 +66,7 @@ BlenderRasterPlugin/
 │       ├── __init__.py
 │       ├── properties.py        # PropertyGroup
 │       ├── panel.py             # View3D sidebar panel
+│       ├── view_ops.py          # Copy From Viewport helper operator
 │       ├── operator.py          # rastersheet.render, pre-flight checks
 │       ├── snapshot.py          # capture and restore via ExitStack
 │       ├── camera.py            # current camera / temporary ortho camera
@@ -172,10 +173,12 @@ def required_ortho_scale(corners: list[Vector], camera_matrix: Matrix,
                          margin: float) -> float
 ```
 
-`corners` are the eight bounding-box corners of the depsgraph-evaluated object,
-in world space. For every frame matrix, the corners are transformed, brought
-into camera space by `camera_matrix.inverted()`, and reduced to a width and a
-height.
+`corners` are the eight bounding-box corners of the depsgraph-evaluated object
+in the object's **local** space, which is what `Object.bound_box` returns. Each
+frame matrix is a full world matrix, so `frame_matrix @ corner` places the
+corner in world space for that frame; the result is brought into camera space
+by `camera_matrix.inverted()` and reduced to a width and a height. Passing
+world-space corners here would apply the base transform twice.
 
 The temporary camera sets `sensor_fit = 'HORIZONTAL'`, so `ortho_scale` is
 unambiguously the horizontal extent of the view in world units. The needed
@@ -201,15 +204,17 @@ scope and is reported by pre-flight as an unsupported configuration.
 ### 4.4 `layout.py`
 
 ```python
-def sheet_layout(frame_count: int, columns: int, mode: str) -> SheetLayout
+def sheet_layout(frame_count: int, columns: int, mode: str,
+                 frame_width: int, frame_height: int) -> SheetLayout
 ```
 
 `mode` is `GRID`, `HORIZONTAL`, or `VERTICAL`. `HORIZONTAL` forces
 `columns = frame_count`; `VERTICAL` forces `columns = 1`; `GRID` uses the
 requested columns and derives `rows = ceil(frame_count / columns)`.
 
-`SheetLayout` carries `rows`, `columns`, and a list of per-frame cell
-rectangles in **top-left origin** pixel coordinates, which is the convention
+`SheetLayout` carries `rows`, `columns`, `frame_width`, `frame_height`, the
+`mode` it was built with, and a list of per-frame cell rectangles in
+**top-left origin** pixel coordinates, which is the convention
 every consumer of the metadata uses. Blender's bottom-up pixel buffer is not
 this module's concern; the shell performs a single flip.
 
@@ -219,7 +224,6 @@ A ragged final row is left transparent.
 
 ```python
 def build_metadata(image_name: str, layout: SheetLayout,
-                   frame_width: int, frame_height: int,
                    animation_name: str, fps: float, loop: bool,
                    axis: str, start_deg: float, sweep_deg: float,
                    clockwise: bool) -> dict
@@ -231,7 +235,6 @@ Produces the document in section 8 below.
 
 ```python
 def sprite_frames_tres(image_res_path: str, layout: SheetLayout,
-                       frame_width: int, frame_height: int,
                        animation_name: str, fps: float, loop: bool) -> str
 ```
 
@@ -612,6 +615,16 @@ ratios.
 - **Studio light filenames** vary between Blender builds, so the Material
   Preview enum must be populated by directory listing and must degrade
   gracefully when the directory is missing.
+- **`view_transform` cannot be introspected.** Its `enum_items` reports a
+  single `NONE` entry because the values come from the OCIO config at runtime.
+  The add-on's own view transform enum is therefore a static list of strings
+  and assignment is wrapped in `try`/`except`. Verified on 5.2: `Standard`,
+  `AgX`, `Filmic`, and `Khronos PBR Neutral` all assign successfully, and the
+  factory default is `AgX`.
+- **Cycles may be absent** from `render.engine`'s enum, because it ships as an
+  add-on that can be disabled. A headless 5.2 run with `--factory-startup`
+  reports only `BLENDER_EEVEE`. Pre-flight must treat a missing engine as a
+  validation failure.
 - **Eevee's enum identifier** differs across the supported version range, so it
   is resolved at runtime.
 - **Large sheets** allocate substantial float buffers. Bounded by the 16384
