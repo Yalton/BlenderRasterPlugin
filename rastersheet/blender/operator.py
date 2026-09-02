@@ -187,7 +187,10 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
                 scene.render.image_settings.color_mode = "RGBA" if settings.transparent else "RGB"
                 scene.render.image_settings.color_depth = "8"
 
-                scene.camera = camera_module.resolve_camera(context, settings, stack, obj)
+                corners = local_corners(obj, depsgraph)
+                scene.camera = camera_module.resolve_camera(
+                    context, settings, stack, obj, corners, frame_matrices, width / height
+                )
 
                 window_manager.progress_begin(0, settings.frame_count)
                 try:

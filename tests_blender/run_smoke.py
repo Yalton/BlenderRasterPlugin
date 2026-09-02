@@ -556,6 +556,173 @@ def test_sheet_only_export_leaves_no_frames_directory():
     assert not os.path.exists(os.path.join(out, "only_frames"))
 
 
+@check
+def test_direction_and_angles_round_trip():
+    from bl_ext.user_default.rastersheet.blender import camera as camera_module
+
+    for azimuth, elevation in [(0.0, 0.0), (90.0, 0.0), (0.0, 30.0), (215.0, -45.0)]:
+        direction = camera_module.direction_from(azimuth, elevation)
+        back_az, back_el = camera_module.angles_from_direction(direction)
+        assert abs(((back_az - azimuth + 180.0) % 360.0) - 180.0) < 1e-4, (azimuth, back_az)
+        assert abs(back_el - elevation) < 1e-4, (elevation, back_el)
+
+
+@check
+def test_front_view_is_down_the_negative_y_axis():
+    from bl_ext.user_default.rastersheet.blender import camera as camera_module
+
+    direction = camera_module.direction_from(0.0, 0.0)
+    assert abs(direction.x) < 1e-6
+    assert abs(direction.y + 1.0) < 1e-6
+    assert abs(direction.z) < 1e-6
+
+
+@check
+def test_auto_ortho_keeps_the_object_off_the_border_at_every_angle():
+    import numpy as np
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube()
+    # Move the object well away from the world origin: auto framing must not
+    # depend on the object sitting at (0, 0, 0).
+    obj.matrix_world = mathutils.Matrix.Translation((7.0, -3.0, 2.0))
+    bpy.context.view_layer.objects.active = obj
+
+    out = os.path.join(SCRATCH, "ortho_run")
+    shutil.rmtree(out, ignore_errors=True)
+
+    settings = scene.rastersheet
+    settings.camera_mode = "AUTO_ORTHO"
+    settings.azimuth = 0.0
+    settings.elevation = 30.0
+    settings.camera_margin = 1.2
+    settings.pivot_mode = "BOUNDS_CENTER"
+    settings.frame_count = 4
+    settings.columns = 2
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 64
+    settings.resolution_y = 64
+    settings.output_dir = out
+    settings.filename_stem = "ortho"
+    settings.export_frames = True
+    settings.export_sheet = False
+    settings.transparent = True
+
+    before_camera = scene.camera
+    before_cameras = len(bpy.data.cameras)
+
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+
+    assert scene.camera == before_camera
+    assert len(bpy.data.cameras) == before_cameras
+
+    for index in range(1, 5):
+        path = os.path.join(out, "ortho_frames", f"ortho_{index:04d}.png")
+        image = bpy.data.images.load(path)
+        try:
+            pixels = np.empty(64 * 64 * 4, dtype=np.float32)
+            image.pixels.foreach_get(pixels)
+            alpha = pixels.reshape(64, 64, 4)[:, :, 3]
+            assert alpha.max() > 0.5, f"frame {index} is empty"
+            border = np.concatenate([alpha[0, :], alpha[-1, :], alpha[:, 0], alpha[:, -1]])
+            assert border.max() < 0.01, f"frame {index} touches the border"
+        finally:
+            bpy.data.images.remove(image)
+
+
+@check
+def test_auto_ortho_recenters_a_subject_whose_origin_is_off_its_bounds_center():
+    # The check above cannot exercise the recentring correction at all: with
+    # BOUNDS_CENTER pivot, the rotation pivot IS the bound_box's own centre,
+    # so bound_box (always an axis-aligned, self-symmetric box) stays exactly
+    # symmetric about that pivot at every angle -- the measured residual
+    # offset is mathematically zero regardless of whether the correction
+    # code runs at all (confirmed by direct bug injection: deleting the
+    # offset step left that check still green). Discriminating the fix
+    # requires a pivot that does NOT coincide with the object's own bounds
+    # centre, which only happens with ORIGIN pivot on a mesh whose geometry
+    # isn't centred on the object's origin -- built here by shifting the
+    # mesh data (not the object) after creation.
+    import numpy as np
+    import shutil
+    import bmesh
+
+    scene = bpy.context.scene
+    name = "RasterSheetOffsetProbe"
+    existing = bpy.data.objects.get(name)
+    if existing:
+        bpy.data.objects.remove(existing, do_unlink=True)
+    mesh = bpy.data.meshes.new(f"{name}Mesh")
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new(name, mesh)
+    scene.collection.objects.link(obj)
+    # Shift the mesh data in local space, leaving the object's origin at
+    # local (0, 0, 0) -- so the bound_box centre no longer coincides with
+    # the ORIGIN pivot used below.
+    obj.data.transform(mathutils.Matrix.Translation((0.35, 0.0, 0.0)))
+    # A location distinct from every other probe object's position elsewhere
+    # in this suite (several of which are never cleaned up): auto framing
+    # only looks at the active object's own bounds, so any leftover probe
+    # sharing this camera's tightly-fit frame would render into it too and
+    # corrupt the border check below.
+    obj.matrix_world = mathutils.Matrix.Translation((-40.0, 25.0, -10.0))
+    bpy.context.view_layer.objects.active = obj
+
+    out = os.path.join(SCRATCH, "ortho_offset_run")
+    shutil.rmtree(out, ignore_errors=True)
+
+    settings = scene.rastersheet
+    settings.camera_mode = "AUTO_ORTHO"
+    settings.azimuth = 60.0
+    settings.elevation = 10.0
+    settings.camera_margin = 1.15
+    settings.pivot_mode = "ORIGIN"
+    settings.rotation_axis = "WORLD_Z"
+    settings.frame_count = 4
+    settings.columns = 2
+    settings.start_angle = 0.0
+    # A small, non-multiple-of-90 sweep: large enough that the object's
+    # off-centre geometry sweeps out a genuinely asymmetric silhouette (so a
+    # missing recentring correction visibly clips), small enough that a
+    # single whole-sheet correction still covers every frame when it IS
+    # applied (this is not a claim that the fix handles arbitrary sweeps --
+    # only that it must handle this one).
+    settings.sweep_angle = math.radians(30.0)
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 64
+    settings.resolution_y = 64
+    settings.output_dir = out
+    settings.filename_stem = "offset"
+    settings.export_frames = True
+    settings.export_sheet = False
+    settings.transparent = True
+
+    before_camera = scene.camera
+    before_cameras = len(bpy.data.cameras)
+
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+
+    assert scene.camera == before_camera
+    assert len(bpy.data.cameras) == before_cameras
+
+    for index in range(1, 5):
+        path = os.path.join(out, "offset_frames", f"offset_{index:04d}.png")
+        image = bpy.data.images.load(path)
+        try:
+            pixels = np.empty(64 * 64 * 4, dtype=np.float32)
+            image.pixels.foreach_get(pixels)
+            alpha = pixels.reshape(64, 64, 4)[:, :, 3]
+            assert alpha.max() > 0.5, f"frame {index} is empty"
+            border = np.concatenate([alpha[0, :], alpha[-1, :], alpha[:, 0], alpha[:, -1]])
+            assert border.max() < 0.01, f"frame {index} touches the border"
+        finally:
+            bpy.data.images.remove(image)
+
+
 def main():
     enable_addon()
     for fn in CHECKS:

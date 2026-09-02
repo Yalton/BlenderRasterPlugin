@@ -37,6 +37,7 @@ class RASTERSHEET_PT_panel(bpy.types.Panel):
             camera.prop(settings, "azimuth")
             camera.prop(settings, "elevation")
             camera.prop(settings, "camera_margin")
+            camera.operator("rastersheet.copy_view", icon="VIEW3D")
 
         rendering = layout.box()
         rendering.label(text="Rendering")

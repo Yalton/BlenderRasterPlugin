@@ -1,10 +1,11 @@
 import bpy
 
-from . import operator, panel, properties
+from . import operator, panel, properties, view_ops
 
 CLASSES = (
     properties.RasterSheetSettings,
     operator.RASTERSHEET_OT_render,
+    view_ops.RASTERSHEET_OT_copy_view,
     panel.RASTERSHEET_PT_panel,
 )
 
