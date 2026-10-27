@@ -29,9 +29,13 @@ def test_multiple_of_360_counts_as_a_full_turn():
     assert degrees(frame_angles(4, 0.0, 720.0, clockwise=False)) == [0.0, 180.0, 360.0, 540.0]
 
 
-def test_count_below_two_is_rejected():
+def test_count_below_one_is_rejected():
     with pytest.raises(ValueError):
-        frame_angles(1, 0.0, 360.0, clockwise=False)
+        frame_angles(0, 0.0, 360.0, clockwise=False)
+
+
+def test_a_single_frame_is_a_still_at_the_start_angle():
+    assert degrees(frame_angles(1, 30.0, 360.0, clockwise=True)) == [30.0]
 
 
 def test_float32_rounded_360_is_classified_as_full_turn():

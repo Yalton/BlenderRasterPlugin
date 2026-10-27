@@ -26,9 +26,13 @@ def frame_angles(count, start_deg, sweep_deg, clockwise):
     error when converting to/from radians. The tolerance is approximately
     1e-3 degrees, which safely exceeds typical float32 error without
     misclassifying human-typed angles.
+
+    A single frame is a still: just the start angle, whatever the sweep.
     """
-    if count < 2:
-        raise ValueError("frame count must be at least 2")
+    if count < 1:
+        raise ValueError("frame count must be at least 1")
+    if count == 1:
+        return [math.radians(start_deg)]
 
     # Check if sweep is a full turn (whole multiple of 360 degrees)
     # with tolerance for float32 rounding error.

@@ -55,6 +55,32 @@ class RASTERSHEET_PT_panel(bpy.types.Panel):
             rendering.prop(settings, "resolution_x")
             rendering.prop(settings, "resolution_y")
 
+        stylize = layout.box()
+        stylize.label(text="Stylize")
+        stylize.prop(settings, "stylize_toon")
+        if settings.stylize_toon:
+            stylize.prop(settings, "toon_bands")
+        stylize.prop(settings, "stylize_outline_3d")
+        if settings.stylize_outline_3d:
+            stylize.prop(settings, "outline_3d_width")
+        stylize.prop(settings, "stylize_silhouette")
+        if settings.stylize_silhouette:
+            stylize.prop(settings, "silhouette_width")
+        if settings.stylize_outline_3d or settings.stylize_silhouette:
+            stylize.prop(settings, "ink_color")
+        stylize.prop(settings, "stylize_glow")
+        if settings.stylize_glow:
+            stylize.prop(settings, "glow_threshold")
+            stylize.prop(settings, "glow_radius")
+            stylize.prop(settings, "glow_intensity")
+        stylize.prop(settings, "stylize_posterize")
+        if settings.stylize_posterize:
+            stylize.prop(settings, "posterize_levels")
+        stylize.prop(settings, "stylize_pixelate")
+        if settings.stylize_pixelate:
+            stylize.prop(settings, "pixel_size")
+            stylize.prop(settings, "pixel_hard_alpha")
+
         sheet = layout.box()
         sheet.label(text="Sprite Sheet")
         sheet.prop(settings, "sheet_mode")

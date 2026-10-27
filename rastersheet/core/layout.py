@@ -35,8 +35,8 @@ class SheetLayout:
 
 
 def sheet_layout(frame_count, columns, mode, frame_width, frame_height):
-    if frame_count < 2:
-        raise ValueError("frame count must be at least 2")
+    if frame_count < 1:
+        raise ValueError("frame count must be at least 1")
     if frame_width < 1 or frame_height < 1:
         raise ValueError("frame dimensions must be positive")
 

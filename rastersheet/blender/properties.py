@@ -42,7 +42,7 @@ class RasterSheetSettings(bpy.types.PropertyGroup):
         ],
         default="LOCAL_Y",
     )
-    frame_count: bpy.props.IntProperty(name="Frames", default=16, min=2, max=256)
+    frame_count: bpy.props.IntProperty(name="Frames", default=16, min=1, max=256)
     clockwise: bpy.props.BoolProperty(name="Clockwise", default=True)
     start_angle: bpy.props.FloatProperty(name="Start Angle", default=0.0, subtype="ANGLE")
     sweep_angle: bpy.props.FloatProperty(
@@ -140,6 +140,60 @@ class RasterSheetSettings(bpy.types.PropertyGroup):
     export_json: bpy.props.BoolProperty(name="Metadata JSON", default=True)
     export_godot: bpy.props.BoolProperty(name="Godot .tres", default=False)
     godot_res_prefix: bpy.props.StringProperty(name="Godot Prefix", default="res://")
+
+    # Stylize: every effect is off by default, so a render with none ticked
+    # is byte-for-byte the plain render.
+    stylize_toon: bpy.props.BoolProperty(
+        name="Toon Shading",
+        default=False,
+        description="Flatten lighting into hard bands (Eevee only). Renders with copies of the materials",
+    )
+    toon_bands: bpy.props.IntProperty(name="Bands", default=3, min=2, max=8)
+    stylize_outline_3d: bpy.props.BoolProperty(
+        name="Ink Outline (3D)",
+        default=False,
+        description="Inverted-hull ink lines around meshes, including where parts overlap",
+    )
+    outline_3d_width: bpy.props.FloatProperty(
+        name="Line Width", default=0.02, min=0.0, soft_max=0.5, subtype="DISTANCE"
+    )
+    stylize_silhouette: bpy.props.BoolProperty(
+        name="Silhouette Outline (2D)",
+        default=False,
+        description="Solid ink band around the rendered shape's outer edge, in pixels",
+    )
+    silhouette_width: bpy.props.IntProperty(name="Width (px)", default=3, min=1, max=64)
+    ink_color: bpy.props.FloatVectorProperty(
+        name="Ink Color",
+        subtype="COLOR",
+        size=4,
+        min=0.0,
+        max=1.0,
+        default=(0.0, 0.0, 0.0, 1.0),
+    )
+    stylize_glow: bpy.props.BoolProperty(
+        name="Glow",
+        default=False,
+        description="Bloom halo around bright and emissive pixels, spilling onto the background",
+    )
+    glow_threshold: bpy.props.FloatProperty(
+        name="Threshold", default=0.75, min=0.0, max=0.99, subtype="FACTOR"
+    )
+    glow_radius: bpy.props.IntProperty(name="Radius (px)", default=12, min=1, max=256)
+    glow_intensity: bpy.props.FloatProperty(name="Intensity", default=1.0, min=0.0, soft_max=4.0)
+    stylize_posterize: bpy.props.BoolProperty(
+        name="Posterize",
+        default=False,
+        description="Reduce each color channel to a few flat levels",
+    )
+    posterize_levels: bpy.props.IntProperty(name="Levels", default=6, min=2, max=32)
+    stylize_pixelate: bpy.props.BoolProperty(
+        name="Pixelate",
+        default=False,
+        description="Chunky pixels at the same frame size",
+    )
+    pixel_size: bpy.props.IntProperty(name="Pixel Size", default=4, min=2, max=64)
+    pixel_hard_alpha: bpy.props.BoolProperty(name="Hard Edges", default=True)
 
     animation_name: bpy.props.StringProperty(name="Animation", default="spin")
     fps: bpy.props.FloatProperty(name="FPS", default=12.0, min=0.1)

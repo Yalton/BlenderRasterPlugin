@@ -58,6 +58,11 @@ def test_unknown_mode_is_rejected():
         sheet_layout(4, 2, "SPIRAL", 8, 8)
 
 
-def test_frame_count_below_two_is_rejected():
+def test_frame_count_below_one_is_rejected():
     with pytest.raises(ValueError):
-        sheet_layout(1, 1, "GRID", 8, 8)
+        sheet_layout(0, 1, "GRID", 8, 8)
+
+
+def test_a_single_frame_is_a_one_cell_sheet():
+    layout = sheet_layout(1, 4, "GRID", 8, 6)
+    assert (layout.columns, layout.rows, layout.sheet_width, layout.sheet_height) == (1, 1, 8, 6)

@@ -61,7 +61,9 @@ following boxes, top to bottom:
   the scene's world X/Y/Z.
 - *Pivot* — rotate about the object's origin, or about the center of its
   evaluated bounding box.
-- *Frames* — how many frames to render (2–256).
+- *Frames* — how many frames to render (1–256). One frame is a still:
+  the object is rendered once at *Start Angle*, which is what card art and
+  icons want.
 - *Clockwise* — rotation direction.
 - *Start Angle* / *Rotation Amount* — where the sweep begins and how far
   it goes, in degrees (a full turn is the default).
@@ -87,6 +89,38 @@ Transform* selects the color transform applied to the render (Standard,
 AgX, Filmic, or the scene's own). *Transparent BG* renders with an alpha
 channel. *Resolution* uses either the scene's render resolution or a
 custom width/height you set here.
+
+**Stylize** — optional comic/pixel looks, every one **off by default**. With
+nothing ticked, rendering is exactly what it was without this box. Tick any
+combination:
+
+- *Toon Shading* — flattens lighting into *Bands* hard tiers while keeping
+  each material's hue and saturation. **Eevee only** (it is built on Shader
+  to RGB); validation refuses it under Cycles. Your materials are never
+  edited: the render uses temporary copies swapped into the slots. Pair it
+  with *Scene Lights* and a single sun for the cleanest bands; an HDRI gives
+  muddier ones.
+- *Ink Outline (3D)* — inverted-hull ink lines of *Line Width* world units
+  around every mesh, which also draws lines where parts overlap. Done with a
+  temporary Solidify modifier and material slot, both removed afterward.
+  Meshes only.
+- *Silhouette Outline (2D)* — a solid ink band *Width* pixels wide around the
+  rendered shape's outer edge, drawn behind the subject. The most reliable
+  readability win when the sprite is shown small. *Ink Color* is shared
+  with the 3D outline.
+- *Glow* — a bloom halo around pixels whose brightest channel is above
+  *Threshold*, so saturated neon glows as well as white. The halo sits
+  behind the subject, so bright colors keep their hue instead of clipping
+  to white, and it spills onto a transparent background.
+- *Posterize* — reduces each color channel to *Levels* flat values.
+- *Pixelate* — averages *Pixel Size* blocks at the same frame size (the sheet
+  layout is unchanged); *Hard Edges* snaps alpha to on/off for crisp
+  pixel-art edges.
+
+Toon shading and the 3D outline apply to every visible, renderable object in
+the scene, not only the rotating target, so a subject built from several
+objects comes out in one style. The 2D effects run on each rendered frame
+before packing, in a fixed order: posterize, silhouette, glow, pixelate.
 
 **Sprite Sheet** — *Layout* chooses Grid, Horizontal Strip, or Vertical
 Strip packing; in Grid mode you also set *Columns* (rows are computed and

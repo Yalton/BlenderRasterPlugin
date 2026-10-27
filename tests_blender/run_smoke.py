@@ -1415,6 +1415,179 @@ def test_godot_export_requires_a_prefix():
         raise AssertionError(f"expected a RuntimeError, got {result}")
 
 
+def _stylize_probe(name, out):
+    """A cube with one material, a camera, and settings for a tiny render."""
+    import shutil
+
+    scene = bpy.context.scene
+    obj = _fresh_cube(name)
+    bpy.context.view_layer.objects.active = obj
+    _ensure_probe_camera(scene)
+    shutil.rmtree(out, ignore_errors=True)
+
+    settings = scene.rastersheet
+    settings.frame_count = 2
+    settings.resolution_mode = "CUSTOM"
+    settings.resolution_x = 32
+    settings.resolution_y = 32
+    settings.output_dir = out
+    settings.filename_stem = "probe"
+    settings.export_frames = True
+    settings.export_sheet = True
+    settings.export_json = False
+    settings.export_godot = False
+    settings.camera_mode = "AUTO_ORTHO"
+    settings.engine_mode = "EEVEE"
+    return scene, obj, settings
+
+
+def _spy_during_render(read):
+    """Run `read()` inside each frame's render_pre and collect what it saw."""
+    seen = []
+
+    def spy(*_args):
+        seen.append(read())
+
+    bpy.app.handlers.render_pre.append(spy)
+    return seen, spy
+
+
+@check
+def test_stylize_effects_are_all_off_by_default():
+    settings = bpy.context.scene.rastersheet
+    flags = [p.identifier for p in settings.bl_rna.properties if p.identifier.startswith("stylize_")]
+    assert len(flags) == 6, flags
+    assert not any(getattr(settings, flag) for flag in flags), flags
+
+
+@check
+def test_toon_and_ink_outline_apply_during_render_and_unwind():
+    import os
+
+    scene, obj, settings = _stylize_probe("StylizeProbe", os.path.join(SCRATCH, "stylize_run"))
+    original = bpy.data.materials.new("StylizeProbeMaterial")
+    original.use_nodes = True
+    obj.data.materials.append(original)
+    settings.stylize_toon = True
+    settings.stylize_outline_3d = True
+
+    materials_before = set(bpy.data.materials)
+    seen, spy = _spy_during_render(
+        lambda: (
+            [slot.material.name if slot.material else None for slot in obj.material_slots],
+            [modifier.type for modifier in obj.modifiers],
+        )
+    )
+    try:
+        result = bpy.ops.rastersheet.render()
+    finally:
+        bpy.app.handlers.render_pre.remove(spy)
+    assert result == {"FINISHED"}, result
+
+    slot_names, modifiers = seen[0]
+    # Slot 0 rendered with a toon copy, never the authored material, and the
+    # outline material rode along as an extra slot behind a Solidify hull.
+    assert slot_names[0] not in {None, "StylizeProbeMaterial"}, slot_names
+    assert slot_names[-1] == "RasterSheet Outline", slot_names
+    assert modifiers == ["SOLIDIFY"], modifiers
+
+    assert [slot.material for slot in obj.material_slots] == [original]
+    assert len(obj.data.materials) == 1
+    assert len(obj.modifiers) == 0
+    assert set(bpy.data.materials) == materials_before
+    # The authored node tree was never rewired.
+    assert not any(node.bl_idname == "ShaderNodeShaderToRGB" for node in original.node_tree.nodes)
+
+
+@check
+def test_toon_and_ink_outline_handle_a_mesh_with_no_materials():
+    import os
+
+    scene, obj, settings = _stylize_probe("StylizeBareProbe", os.path.join(SCRATCH, "stylize_bare"))
+    settings.stylize_toon = True
+    settings.stylize_outline_3d = True
+
+    materials_before = set(bpy.data.materials)
+    seen, spy = _spy_during_render(lambda: [slot.material.name if slot.material else None for slot in obj.material_slots])
+    try:
+        result = bpy.ops.rastersheet.render()
+    finally:
+        bpy.app.handlers.render_pre.remove(spy)
+    assert result == {"FINISHED"}, result
+
+    # The object's own faces must not be drawn by the outline material.
+    assert seen[0][0] not in {None, "RasterSheet Outline"}, seen[0]
+    assert len(obj.data.materials) == 0
+    assert len(obj.modifiers) == 0
+    assert set(bpy.data.materials) == materials_before
+
+
+@check
+def test_toon_shading_refuses_a_non_eevee_engine():
+    import os
+
+    scene, obj, settings = _stylize_probe("StylizeCyclesProbe", os.path.join(SCRATCH, "stylize_cycles"))
+    settings.engine_mode = "CYCLES"
+    settings.stylize_toon = True
+    try:
+        result = bpy.ops.rastersheet.render()
+    except RuntimeError as exc:
+        assert "Eevee" in str(exc), exc
+    else:
+        raise AssertionError(f"expected a RuntimeError, got {result}")
+
+
+@check
+def test_post_effects_change_pixels_but_not_frame_size():
+    import os
+
+    import numpy as np
+
+    def pixels(path):
+        image = bpy.data.images.load(path, check_existing=False)
+        try:
+            buffer = np.empty(image.size[0] * image.size[1] * 4, dtype=np.float32)
+            image.pixels.foreach_get(buffer)
+            return tuple(image.size), buffer
+        finally:
+            bpy.data.images.remove(image)
+
+    out = os.path.join(SCRATCH, "stylize_post")
+    scene, obj, settings = _stylize_probe("StylizePostProbe", out)
+    settings.camera_margin = 2.0  # room around the cube for the ink band
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+    plain_size, plain = pixels(os.path.join(out, "probe_frames", "probe_0001.png"))
+
+    settings.stylize_silhouette = True
+    settings.silhouette_width = 2
+    settings.stylize_posterize = True
+    settings.stylize_glow = True
+    settings.stylize_pixelate = True
+    settings.pixel_size = 2
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+    styled_size, styled = pixels(os.path.join(out, "probe_frames", "probe_0001.png"))
+    sheet_size, _ = pixels(os.path.join(out, "probe.png"))
+
+    assert styled_size == plain_size == (32, 32), (styled_size, plain_size)
+    assert sheet_size == (64, 32), sheet_size
+    # The ink band covers pixels the plain render left transparent.
+    assert (styled[3::4] > 0.5).sum() > (plain[3::4] > 0.5).sum()
+
+
+@check
+def test_a_single_frame_renders_a_one_cell_sheet():
+    import os
+
+    out = os.path.join(SCRATCH, "still_run")
+    scene, obj, settings = _stylize_probe("StillProbe", out)
+    settings.frame_count = 1
+    before = obj.matrix_world.copy()
+    assert bpy.ops.rastersheet.render() == {"FINISHED"}
+    assert sorted(os.listdir(os.path.join(out, "probe_frames"))) == ["probe_0001.png"]
+    assert os.path.isfile(os.path.join(out, "probe.png"))
+    assert _matrices_close(obj.matrix_world, before)
+
+
 def main():
     enable_addon()
     for fn in CHECKS:

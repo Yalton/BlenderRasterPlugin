@@ -20,6 +20,7 @@ from . import lighting as lighting_module
 from . import packing as packing_module
 from . import render as render_module
 from . import snapshot
+from . import stylize as stylize_module
 
 MAX_SHEET_SIDE = 16384
 
@@ -163,8 +164,8 @@ def validate(context, settings):
     if settings.camera_mode == "CURRENT" and scene.camera is None:
         problems.append("Camera mode is Current Camera but the scene has no camera")
 
-    if settings.frame_count < 2:
-        problems.append("Frame count must be at least 2")
+    if settings.frame_count < 1:
+        problems.append("Frame count must be at least 1")
 
     if settings.export_godot and not settings.export_sheet:
         problems.append("Godot export needs the sprite sheet enabled")
@@ -181,13 +182,23 @@ def validate(context, settings):
         except RuntimeError as exc:
             problems.append(str(exc))
 
+    if settings.stylize_toon:
+        engine = scene.render.engine
+        if settings.engine_mode != "SCENE":
+            try:
+                engine = resolve_engine(scene, settings.engine_mode)
+            except RuntimeError:
+                pass  # already reported above
+        if not stylize_module.is_eevee(engine):
+            problems.append("Toon shading needs Eevee (Shader to RGB is Eevee-only)")
+
     if settings.lighting_mode == "CUSTOM_HDRI":
         path = bpy.path.abspath(settings.hdri_path)
         if not path or not os.path.isfile(path):
             problems.append("Custom HDRI mode needs a readable image path")
 
     width, height = resolution_for(scene, settings)
-    if settings.frame_count >= 2:
+    if settings.frame_count >= 1:
         layout = sheet_layout(settings.frame_count, settings.columns, settings.sheet_mode, width, height)
         if layout.sheet_width > MAX_SHEET_SIDE or layout.sheet_height > MAX_SHEET_SIDE:
             problems.append(
@@ -319,6 +330,16 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
 
                 lighting_module.apply_lighting(context, settings, stack)
 
+                styled = stylize_module.styled_objects(context)
+                if settings.stylize_toon:
+                    for warning in stylize_module.apply_toon(stack, styled, settings.toon_bands):
+                        self.report({"WARNING"}, warning)
+                if settings.stylize_outline_3d:
+                    for warning in stylize_module.apply_outline(
+                        stack, styled, settings.outline_3d_width, settings.ink_color
+                    ):
+                        self.report({"WARNING"}, warning)
+
                 corners = local_corners(obj, depsgraph)
                 scene.camera = camera_module.resolve_camera(
                     context, settings, stack, obj, corners, frame_matrices, width / height
@@ -334,6 +355,15 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
                 finally:
                     window_manager.progress_end()
 
+            frame_paths = [
+                os.path.join(frames_dir, frame_filename(paths.stem, index))
+                for index in range(settings.frame_count)
+            ]
+
+            options = stylize_module.post_options(settings)
+            if options is not None:
+                stylize_module.post_process(frame_paths, options)
+
             layout = sheet_layout(
                 settings.frame_count,
                 settings.columns,
@@ -343,10 +373,6 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
             )
 
             if settings.export_sheet:
-                frame_paths = [
-                    os.path.join(frames_dir, frame_filename(paths.stem, index))
-                    for index in range(settings.frame_count)
-                ]
                 packing_module.pack_sheet(frame_paths, layout, paths.sheet)
 
             image_name = os.path.basename(paths.sheet)
