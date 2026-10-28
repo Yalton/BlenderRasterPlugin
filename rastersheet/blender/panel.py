@@ -60,6 +60,11 @@ class RASTERSHEET_PT_panel(bpy.types.Panel):
         stylize.prop(settings, "stylize_toon")
         if settings.stylize_toon:
             stylize.prop(settings, "toon_bands")
+            stylize.prop(settings, "toon_matte")
+            stylize.prop(settings, "toon_smooth")
+            stylize.prop(settings, "toon_brightness")
+            stylize.prop(settings, "toon_saturation")
+            stylize.prop(settings, "toon_ink_shadows")
         stylize.prop(settings, "stylize_outline_3d")
         if settings.stylize_outline_3d:
             stylize.prop(settings, "outline_3d_width")
@@ -107,4 +112,6 @@ class RASTERSHEET_PT_panel(bpy.types.Panel):
             export.prop(settings, "godot_res_prefix")
 
         layout.separator()
-        layout.operator("rastersheet.render", icon="RENDER_RESULT")
+        row = layout.row(align=True)
+        row.operator("rastersheet.render", icon="RENDER_RESULT")
+        row.operator("rastersheet.render_still", icon="IMAGE_DATA")

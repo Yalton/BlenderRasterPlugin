@@ -53,7 +53,59 @@ def _math(tree, operation, value):
     return node
 
 
-def _toonify(material, bands):
+def _make_matte(tree):
+    """Zero Metallic on every Principled BSDF in `tree`, cutting any texture
+    driving it.
+
+    Metal has no diffuse response: lit by one lamp it renders black apart
+    from a highlight, and lit by an HDRI it mirrors the HDRI instead of
+    showing its form. Banded shading needs light falling on the surface, so
+    a matte render is what toon shading usually wants. Only called on the
+    temporary copy, never the authored material.
+    """
+    for node in tree.nodes:
+        if node.bl_idname != "ShaderNodeBsdfPrincipled":
+            continue
+        metallic = node.inputs.get("Metallic")
+        if metallic is None:
+            continue
+        for link in list(metallic.links):
+            tree.links.remove(link)
+        metallic.default_value = 0.0
+
+
+# Inputs whose textures add per-pixel lighting noise rather than color.
+_DETAIL_INPUTS = {
+    "ShaderNodeOutputMaterial": ("Displacement",),
+}
+_BSDF_DETAIL_INPUTS = ("Normal", "Roughness")
+
+
+def _drop_surface_detail(tree):
+    """Cut the textures that perturb lighting: normal, bump, roughness.
+
+    Normal maps, displacement (which Eevee renders as bump) and roughness
+    maps put per-pixel noise into the *lighting*, and banding turns that
+    noise into speckle along every band edge. Without them the bands follow
+    the model's actual shape, which is what reads as inked. Color textures
+    are kept: those are the model's paint, not its lighting. A cut
+    roughness falls back to the socket's own unlinked value.
+    Only called on the temporary copy, never the authored material.
+    """
+    for node in tree.nodes:
+        if node.bl_idname.startswith("ShaderNodeBsdf"):
+            names = _BSDF_DETAIL_INPUTS
+        else:
+            names = _DETAIL_INPUTS.get(node.bl_idname, ())
+        for name in names:
+            socket = node.inputs.get(name)
+            if socket is None:
+                continue
+            for link in list(socket.links):
+                tree.links.remove(link)
+
+
+def _toonify(material, bands, brightness, saturation, ink_shadows):
     """Rewire `material`'s surface through a banded Shader to RGB.
 
     Shader to RGB captures the fully lit color (Eevee only); its HSV value is
@@ -65,6 +117,12 @@ def _toonify(material, bands):
     every band crowds into the bright half and the render washes out;
     perceptual steps come out evenly spaced on screen. Values above 1
     (emissive parts) pass through the same curve and stay above 1.
+
+    The comic controls all act on that perceptual value, after banding, so
+    each one moves the bands evenly on screen: `brightness` scales them,
+    `ink_shadows` turns every band at or below it solid black (the large
+    spot blacks of inked comics), and `saturation` scales color intensity.
+    Their neutral values (1, 0, 1) leave the banded result unchanged.
     """
     tree = material.node_tree
     output, link = _surface_link(tree)
@@ -84,17 +142,31 @@ def _toonify(material, bands):
     snap = tree.nodes.new("ShaderNodeMath")
     snap.operation = "ROUND"
     unscale = _math(tree, "DIVIDE", float(bands))
+    brighten = _math(tree, "MULTIPLY", float(brightness))
+    # 1 above the ink threshold, 0 at or below it; multiplying by it inks
+    # the shadow bands. A threshold of 0 keeps everything but true black.
+    lit = _math(tree, "GREATER_THAN", float(ink_shadows))
+    ink = tree.nodes.new("ShaderNodeMath")
+    ink.operation = "MULTIPLY"
     decode = _math(tree, "POWER", 2.2)
     tree.links.new(separate.outputs[2], encode.inputs[0])
     tree.links.new(encode.outputs[0], scale.inputs[0])
     tree.links.new(scale.outputs[0], snap.inputs[0])
     tree.links.new(snap.outputs[0], unscale.inputs[0])
-    tree.links.new(unscale.outputs[0], decode.inputs[0])
+    tree.links.new(unscale.outputs[0], brighten.inputs[0])
+    tree.links.new(unscale.outputs[0], lit.inputs[0])
+    tree.links.new(brighten.outputs[0], ink.inputs[0])
+    tree.links.new(lit.outputs[0], ink.inputs[1])
+    tree.links.new(ink.outputs[0], decode.inputs[0])
+
+    saturate = _math(tree, "MULTIPLY", float(saturation))
+    saturate.use_clamp = True
+    tree.links.new(separate.outputs[1], saturate.inputs[0])
 
     combine = tree.nodes.new("ShaderNodeCombineColor")
     combine.mode = "HSV"
     tree.links.new(separate.outputs[0], combine.inputs[0])
-    tree.links.new(separate.outputs[1], combine.inputs[1])
+    tree.links.new(saturate.outputs[0], combine.inputs[1])
     tree.links.new(decode.outputs[0], combine.inputs[2])
 
     emission = tree.nodes.new("ShaderNodeEmission")
@@ -128,7 +200,7 @@ def _append_slot(stack, data, material):
     stack.callback(data.materials.pop)
 
 
-def apply_toon(stack, objects, bands):
+def apply_toon(stack, objects, bands, brightness=1.0, saturation=1.0, ink_shadows=0.0, matte=False, smooth=False):
     """Swap toon copies of every material into the objects' slots.
 
     Returns warnings for materials that could not be converted (no node
@@ -160,7 +232,11 @@ def apply_toon(stack, objects, bands):
                 copy = original.copy()
                 _track(stack, bpy.data.materials, copy)
                 copy.use_nodes = True
-                if not _toonify(copy, bands):
+                if matte:
+                    _make_matte(copy.node_tree)
+                if smooth:
+                    _drop_surface_detail(copy.node_tree)
+                if not _toonify(copy, bands, brightness, saturation, ink_shadows):
                     warnings.append(f"Toon shading skipped material {original.name!r}: no Surface output")
                 copies[original] = copy
             snapshot.guard(stack, slot, "material")

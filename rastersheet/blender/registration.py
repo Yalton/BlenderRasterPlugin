@@ -5,6 +5,7 @@ from . import operator, panel, properties, view_ops
 CLASSES = (
     properties.RasterSheetSettings,
     operator.RASTERSHEET_OT_render,
+    operator.RASTERSHEET_OT_render_still,
     view_ops.RASTERSHEET_OT_copy_view,
     panel.RASTERSHEET_PT_panel,
 )

@@ -149,6 +149,46 @@ class RasterSheetSettings(bpy.types.PropertyGroup):
         description="Flatten lighting into hard bands (Eevee only). Renders with copies of the materials",
     )
     toon_bands: bpy.props.IntProperty(name="Bands", default=3, min=2, max=8)
+    toon_matte: bpy.props.BoolProperty(
+        name="Matte",
+        default=False,
+        description=(
+            "Render metallic materials as non-metallic so light shades their form. "
+            "Metal under a single lamp is black apart from its highlight"
+        ),
+    )
+    toon_smooth: bpy.props.BoolProperty(
+        name="Ignore Surface Detail",
+        default=False,
+        description=(
+            "Disconnect normal, displacement and roughness maps so bands follow the "
+            "model's shape instead of breaking into speckle along their edges"
+        ),
+    )
+    toon_brightness: bpy.props.FloatProperty(
+        name="Brightness",
+        default=1.0,
+        min=0.0,
+        soft_max=2.0,
+        subtype="FACTOR",
+        description="Scale every band's on-screen brightness; below 1 darkens toward a moodier look",
+    )
+    toon_saturation: bpy.props.FloatProperty(
+        name="Saturation",
+        default=1.0,
+        min=0.0,
+        soft_max=2.0,
+        subtype="FACTOR",
+        description="Scale color intensity; above 1 pushes toward flat comic color",
+    )
+    toon_ink_shadows: bpy.props.FloatProperty(
+        name="Ink Shadows",
+        default=0.0,
+        min=0.0,
+        max=1.0,
+        subtype="FACTOR",
+        description="Bands at or below this brightness become solid black, like inked comic shadows",
+    )
     stylize_outline_3d: bpy.props.BoolProperty(
         name="Ink Outline (3D)",
         default=False,

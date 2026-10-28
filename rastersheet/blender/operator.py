@@ -238,13 +238,36 @@ def warnings_for(context):
     return []
 
 
-class RASTERSHEET_OT_render(bpy.types.Operator):
-    bl_idname = "rastersheet.render"
-    bl_label = "Render Sprite Sheet"
-    bl_description = "Rotate the active object and render each angle to a sprite sheet"
+class SettingsView:
+    """The scene's settings with a few values replaced for one run.
+
+    validate() and run() only read attributes, so handing them this instead
+    of the PropertyGroup lets an operator change what a render does without
+    writing to the user's settings (and without a restore step that a crash
+    could skip).
+    """
+
+    def __init__(self, settings, **overrides):
+        self._settings = settings
+        self._overrides = overrides
+
+    def __getattr__(self, name):
+        if name in self._overrides:
+            return self._overrides[name]
+        return getattr(self._settings, name)
+
+
+class _RenderMixin:
+    """The shared validate-run-report body of both render operators.
+
+    A plain class, not an Operator: Blender cannot register an Operator that
+    subclasses another registered Operator -- the base loses its Python class
+    ("unable to get Python class for RNA struct") and silently stops running.
+    Each concrete operator supplies `done_message` and `settings_for`.
+    """
 
     def execute(self, context):
-        settings = context.scene.rastersheet
+        settings = self.settings_for(context)
 
         problems = validate(context, settings)
         if problems:
@@ -260,7 +283,7 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
             self.report({"ERROR"}, str(exc))
             return {"CANCELLED"}
 
-        self.report({"INFO"}, "Sprite sheet generated")
+        self.report({"INFO"}, self.done_message)
         return {"FINISHED"}
 
     def run(self, context, settings):
@@ -332,7 +355,16 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
 
                 styled = stylize_module.styled_objects(context)
                 if settings.stylize_toon:
-                    for warning in stylize_module.apply_toon(stack, styled, settings.toon_bands):
+                    for warning in stylize_module.apply_toon(
+                        stack,
+                        styled,
+                        settings.toon_bands,
+                        brightness=settings.toon_brightness,
+                        saturation=settings.toon_saturation,
+                        ink_shadows=settings.toon_ink_shadows,
+                        matte=settings.toon_matte,
+                        smooth=settings.toon_smooth,
+                    ):
                         self.report({"WARNING"}, warning)
                 if settings.stylize_outline_3d:
                     for warning in stylize_module.apply_outline(
@@ -412,3 +444,38 @@ class RASTERSHEET_OT_render(bpy.types.Operator):
                 shutil.rmtree(temp_frames_dir, ignore_errors=True)
 
         return paths
+
+
+class RASTERSHEET_OT_render(_RenderMixin, bpy.types.Operator):
+    bl_idname = "rastersheet.render"
+    bl_label = "Render Sprite Sheet"
+    bl_description = "Rotate the active object and render each angle to a sprite sheet"
+
+    done_message = "Sprite sheet generated"
+
+    def settings_for(self, context):
+        return context.scene.rastersheet
+
+
+class RASTERSHEET_OT_render_still(_RenderMixin, bpy.types.Operator):
+    bl_idname = "rastersheet.render_still"
+    bl_label = "Render Still"
+    bl_description = (
+        "Render one image at the start angle to <filename>.png, ignoring the frame count "
+        "and writing no frames folder, JSON, or .tres"
+    )
+
+    done_message = "Still rendered"
+
+    def settings_for(self, context):
+        # A one-frame sheet is exactly the frame, so writing only the sheet
+        # gives a single <stem>.png with every other setting -- camera,
+        # lighting, stylize -- applied as for a sprite sheet.
+        return SettingsView(
+            context.scene.rastersheet,
+            frame_count=1,
+            export_frames=False,
+            export_sheet=True,
+            export_json=False,
+            export_godot=False,
+        )

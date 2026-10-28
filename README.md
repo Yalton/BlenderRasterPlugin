@@ -99,7 +99,18 @@ combination:
   to RGB); validation refuses it under Cycles. Your materials are never
   edited: the render uses temporary copies swapped into the slots. Pair it
   with *Scene Lights* and a single sun for the cleanest bands; an HDRI gives
-  muddier ones.
+  muddier ones. Sub-options, all neutral by default:
+  - *Matte* — render metallic materials as non-metallic. Metal has no
+    diffuse shading: under one lamp it is black apart from its highlight,
+    and under an HDRI it mirrors the HDRI instead of showing its form.
+    Usually wanted for toon.
+  - *Ignore Surface Detail* — disconnect normal, displacement and roughness
+    maps so the bands follow the model's shape instead of breaking into
+    speckle. Color textures (the model's paint) are kept.
+  - *Brightness* / *Saturation* — scale the bands' on-screen brightness and
+    color intensity.
+  - *Ink Shadows* — bands at or below this brightness become solid black,
+    the large spot blacks of inked comics.
 - *Ink Outline (3D)* — inverted-hull ink lines of *Line Width* world units
   around every mesh, which also draws lines where parts overlap. Done with a
   temporary Solidify modifier and material slot, both removed afterward.
@@ -139,7 +150,11 @@ requires the sprite sheet export to also be enabled — RasterSheet checks
 this and every other setting before touching disk, and refuses to run if
 anything is wrong.
 
-Click **Render Sprite Sheet** to run.
+Click **Render Sprite Sheet** to run. **Render Still** renders one image at
+*Start Angle* to `<Filename>.png`, ignoring *Frames* and the export toggles
+(no frames folder, JSON or `.tres`); every other setting applies as usual.
+It writes the same `<Filename>.png` a sprite sheet would, so use a
+different *Filename* if you want to keep both.
 
 ## Scene safety
 

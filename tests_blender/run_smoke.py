@@ -1420,6 +1420,10 @@ def _stylize_probe(name, out):
     import shutil
 
     scene = bpy.context.scene
+    # Stylize applies to every visible object, so earlier checks' probes --
+    # all at the origin -- would render into this one. Clear them out.
+    for leftover in [o for o in scene.objects if o.type in {"MESH", "CURVE", "FONT"}]:
+        bpy.data.objects.remove(leftover, do_unlink=True)
     obj = _fresh_cube(name)
     bpy.context.view_layer.objects.active = obj
     _ensure_probe_camera(scene)
@@ -1457,6 +1461,11 @@ def test_stylize_effects_are_all_off_by_default():
     settings = bpy.context.scene.rastersheet
     flags = [p.identifier for p in settings.bl_rna.properties if p.identifier.startswith("stylize_")]
     assert len(flags) == 6, flags
+    toon = settings.bl_rna.properties
+    neutral = {"toon_matte": False, "toon_smooth": False, "toon_brightness": 1.0,
+               "toon_saturation": 1.0, "toon_ink_shadows": 0.0}
+    for name, value in neutral.items():
+        assert toon[name].default == value, (name, toon[name].default)
     assert not any(getattr(settings, flag) for flag in flags), flags
 
 
@@ -1560,6 +1569,49 @@ def test_ink_outline_hull_stays_within_its_width_at_sharp_corners():
 
 
 @check
+def test_toon_matte_and_smooth_rewire_only_the_copy():
+    import contextlib
+
+    from bl_ext.user_default.rastersheet.blender import stylize as stylize_module
+
+    obj = _fresh_cube("ToonDetailProbe")
+    material = bpy.data.materials.new("ToonDetailMaterial")
+    material.use_nodes = True
+    tree = material.node_tree
+    principled = tree.nodes["Principled BSDF"]
+    output = tree.get_output_node("ALL")
+    noise = tree.nodes.new("ShaderNodeTexNoise")
+    normal_map = tree.nodes.new("ShaderNodeNormalMap")
+    displacement = tree.nodes.new("ShaderNodeDisplacement")
+    tree.links.new(noise.outputs["Fac"], principled.inputs["Metallic"])
+    tree.links.new(noise.outputs["Fac"], principled.inputs["Roughness"])
+    tree.links.new(noise.outputs["Color"], principled.inputs["Base Color"])
+    tree.links.new(normal_map.outputs["Normal"], principled.inputs["Normal"])
+    tree.links.new(displacement.outputs[0], output.inputs["Displacement"])
+    obj.data.materials.append(material)
+
+    def linked(node_tree, node_type, socket):
+        node = next(n for n in node_tree.nodes if n.bl_idname == node_type)
+        return node.inputs[socket].is_linked, node.inputs[socket]
+
+    with contextlib.ExitStack() as stack:
+        stylize_module.apply_toon(stack, [obj], 3, matte=True, smooth=True)
+        copy = obj.material_slots[0].material.node_tree
+        metallic_linked, metallic = linked(copy, "ShaderNodeBsdfPrincipled", "Metallic")
+        assert not metallic_linked and metallic.default_value == 0.0
+        for socket in ("Roughness", "Normal"):
+            assert not linked(copy, "ShaderNodeBsdfPrincipled", socket)[0], socket
+        assert not linked(copy, "ShaderNodeOutputMaterial", "Displacement")[0]
+        # Paint survives: color textures are not lighting detail.
+        assert linked(copy, "ShaderNodeBsdfPrincipled", "Base Color")[0]
+
+    for socket in ("Metallic", "Roughness", "Normal", "Base Color"):
+        assert principled.inputs[socket].is_linked, socket
+    assert output.inputs["Displacement"].is_linked
+    bpy.data.objects.remove(obj, do_unlink=True)
+
+
+@check
 def test_toon_shading_refuses_a_non_eevee_engine():
     import os
 
@@ -1623,6 +1675,69 @@ def test_a_single_frame_renders_a_one_cell_sheet():
     assert sorted(os.listdir(os.path.join(out, "probe_frames"))) == ["probe_0001.png"]
     assert os.path.isfile(os.path.join(out, "probe.png"))
     assert _matrices_close(obj.matrix_world, before)
+
+
+@check
+def test_render_still_writes_one_image_and_leaves_the_settings_alone():
+    import os
+
+    out = os.path.join(SCRATCH, "still_button")
+    scene, obj, settings = _stylize_probe("StillButtonProbe", out)
+    settings.frame_count = 8
+    settings.export_json = True
+    assert bpy.ops.rastersheet.render_still() == {"FINISHED"}
+
+    assert sorted(os.listdir(out)) == ["probe.png"], sorted(os.listdir(out))
+    image = bpy.data.images.load(os.path.join(out, "probe.png"), check_existing=False)
+    try:
+        assert tuple(image.size) == (32, 32), tuple(image.size)
+    finally:
+        bpy.data.images.remove(image)
+    assert settings.frame_count == 8
+    assert settings.export_frames and settings.export_json
+
+
+@check
+def test_toon_ink_shadows_and_brightness_darken_the_render():
+    import os
+
+    import numpy as np
+
+    out = os.path.join(SCRATCH, "toon_look")
+    scene, obj, settings = _stylize_probe("ToonLookProbe", out)
+    material = bpy.data.materials.new("ToonLookMaterial")
+    material.use_nodes = True
+    # Mid grey: white under flat white light renders brighter than 1.0, and a
+    # band above 1 is correctly never inked, even at the maximum threshold.
+    principled = material.node_tree.nodes["Principled BSDF"]
+    principled.inputs["Base Color"].default_value = (0.3, 0.3, 0.3, 1.0)
+    obj.data.materials.append(material)
+    settings.lighting_mode = "FLAT"
+    settings.stylize_toon = True
+
+    def mean_opaque_brightness():
+        assert bpy.ops.rastersheet.render_still() == {"FINISHED"}
+        image = bpy.data.images.load(os.path.join(out, "probe.png"), check_existing=False)
+        try:
+            buffer = np.empty(image.size[0] * image.size[1] * 4, dtype=np.float32)
+            image.pixels.foreach_get(buffer)
+        finally:
+            bpy.data.images.remove(image)
+        pixels = buffer.reshape(-1, 4)
+        opaque = pixels[pixels[:, 3] > 0.99]
+        assert len(opaque) > 0
+        return float(opaque[:, :3].mean())
+
+    plain = mean_opaque_brightness()
+    settings.toon_brightness = 0.5
+    dimmed = mean_opaque_brightness()
+    settings.toon_brightness = 1.0
+    settings.toon_ink_shadows = 1.0
+    inked = mean_opaque_brightness()
+
+    assert plain > 0.2, plain
+    assert dimmed < plain * 0.75, (dimmed, plain)
+    assert inked < 0.02, inked
 
 
 def main():
