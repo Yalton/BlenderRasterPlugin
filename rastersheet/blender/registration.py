@@ -6,7 +6,7 @@ CLASSES = (
     properties.RasterSheetSettings,
     operator.RASTERSHEET_OT_render,
     operator.RASTERSHEET_OT_render_still,
-    operator.RASTERSHEET_OT_comic_preset,
+    operator.RASTERSHEET_OT_apply_preset,
     view_ops.RASTERSHEET_OT_copy_view,
     panel.RASTERSHEET_PT_panel,
 )

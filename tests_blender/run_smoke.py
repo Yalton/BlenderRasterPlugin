@@ -1822,21 +1822,37 @@ def test_key_light_is_placed_relative_to_the_camera_and_removed():
 
 
 @check
-def test_comic_preset_sets_the_look_and_leaves_output_alone():
-    from bl_ext.user_default.rastersheet.blender.operator import COMIC_PRESET
+def test_presets_set_the_look_and_leave_output_alone():
+    from bl_ext.user_default.rastersheet.blender.operator import LOOK_SETTINGS, PRESETS
+
+    def matches(actual, value):
+        if isinstance(value, tuple):
+            return all(abs(a - b) < 1e-6 for a, b in zip(actual, value))
+        return actual == value or abs(actual - value) < 1e-6
 
     settings = bpy.context.scene.rastersheet
     settings.output_dir = "/tmp/keep_me/"
     settings.resolution_x = 123
-    assert bpy.ops.rastersheet.comic_preset() == {"FINISHED"}
-    for name, value in COMIC_PRESET.items():
-        actual = getattr(settings, name)
-        if isinstance(value, tuple):
-            assert all(abs(a - b) < 1e-6 for a, b in zip(actual, value)), (name, tuple(actual))
-        else:
-            assert actual == value or abs(actual - value) < 1e-6, (name, actual)
+    settings.frame_count = 7
+
+    for identifier, _, _, values in PRESETS:
+        # Dirty a setting the preset does not name; the preset must reset it.
+        settings.stylize_pixelate = True
+        assert bpy.ops.rastersheet.apply_preset(preset=identifier) == {"FINISHED"}
+        for name, value in values.items():
+            assert matches(getattr(settings, name), value), (identifier, name, getattr(settings, name))
+        if "stylize_pixelate" not in values:
+            assert settings.stylize_pixelate is False, identifier
+
+    assert bpy.ops.rastersheet.apply_preset(preset="PLAIN") == {"FINISHED"}
+    for name in LOOK_SETTINGS:
+        prop = settings.bl_rna.properties[name]
+        default = tuple(prop.default_array) if getattr(prop, "is_array", False) else prop.default
+        assert matches(getattr(settings, name), default), (name, getattr(settings, name), default)
+
     assert settings.output_dir == "/tmp/keep_me/"
     assert settings.resolution_x == 123
+    assert settings.frame_count == 7
 
 
 def main():

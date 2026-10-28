@@ -95,11 +95,22 @@ AgX, Filmic, or the scene's own). *Transparent BG* renders with an alpha
 channel. *Resolution* uses either the scene's render resolution or a
 custom width/height you set here.
 
-**Stylize** — the **Comic Preset** button beside the heading sets lighting
-and every Stylize option to the inked card-art look (Key Light, toon with
-Matte, Ignore Surface Detail, Flat Color and a cyan Rim Light, 3D and 2D
-black ink outlines); camera, resolution and output are left alone, and it is
-undoable. Optional comic/pixel looks, every one **off by default**. With
+**Stylize** — the **Presets** dropdown beside the heading sets lighting and
+every Stylize option at once; camera, rotation, resolution, sheet and output
+settings are left alone, and it is undoable. A preset resets every look
+setting before applying its own, so the result never depends on what was
+set before:
+
+- *Plain* — everything back to default: no Stylize, studio lighting. The
+  add-on as it was before Stylize existed.
+- *Comic* — the inked card-art look: Key Light, toon with Matte, Ignore
+  Surface Detail, Flat Color and a cyan Rim Light, black 3D and 2D outlines.
+- *Neon* — Comic in near-black with a wide, glowing cyan rim.
+- *Magenta* — Comic with a hot magenta rim and a soft glow.
+- *Noir* — two bands, deep ink shadows, muted color, thin white rim, heavy
+  outline.
+
+Optional comic/pixel looks, every one **off by default**. With
 nothing ticked, rendering is exactly what it was without this box. Tick any
 combination:
 

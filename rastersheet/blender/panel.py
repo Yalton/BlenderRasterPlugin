@@ -63,7 +63,9 @@ class RASTERSHEET_PT_panel(bpy.types.Panel):
         stylize = layout.box()
         header = stylize.row()
         header.label(text="Stylize")
-        header.operator("rastersheet.comic_preset", icon="BRUSH_DATA")
+        header.operator_menu_enum(
+            "rastersheet.apply_preset", "preset", text="Presets", icon="BRUSH_DATA"
+        )
         stylize.prop(settings, "stylize_toon")
         if settings.stylize_toon:
             stylize.prop(settings, "toon_bands")

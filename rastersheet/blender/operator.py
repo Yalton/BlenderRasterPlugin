@@ -476,22 +476,59 @@ class RASTERSHEET_OT_render_still(_RenderMixin, bpy.types.Operator):
         )
 
 
-# The look settled on for Chain Shot card art: flat inked fills, a hard key
-# from the upper left, cyan rim, black ink. Everything not named here --
-# camera, resolution, output -- is left as the user set it.
-COMIC_PRESET = {
+# --- Presets -----------------------------------------------------------------
+#
+# Every preset first returns every look setting below to its declared
+# default, then applies its own values, so a preset fully determines the
+# look no matter what was set before -- and "Plain" is exactly the add-on
+# before Stylize existed. Camera, rotation, resolution, sheet and output
+# settings are never in this list and are never touched.
+
+LOOK_SETTINGS = (
+    "engine_mode",
+    "lighting_mode",
+    "key_elevation",
+    "key_side",
+    "key_strength",
+    "key_ambient",
+    "stylize_toon",
+    "toon_bands",
+    "toon_matte",
+    "toon_smooth",
+    "toon_flat_color",
+    "toon_faceted",
+    "toon_rim",
+    "toon_rim_color",
+    "toon_rim_width",
+    "toon_brightness",
+    "toon_saturation",
+    "toon_ink_shadows",
+    "stylize_outline_3d",
+    "outline_3d_width",
+    "stylize_silhouette",
+    "silhouette_width",
+    "ink_color",
+    "stylize_glow",
+    "glow_threshold",
+    "glow_radius",
+    "glow_intensity",
+    "stylize_posterize",
+    "posterize_levels",
+    "stylize_pixelate",
+    "pixel_size",
+    "pixel_hard_alpha",
+)
+
+# The inked card-art base the comic presets vary: flat fills, a hard key
+# from the upper left, a rim, black ink.
+_COMIC = {
     "engine_mode": "EEVEE",
     "lighting_mode": "KEY_LIGHT",
-    "key_elevation": 35.0,
-    "key_side": -35.0,
-    "key_strength": 4.0,
-    "key_ambient": 0.0,
     "stylize_toon": True,
     "toon_bands": 3,
     "toon_matte": True,
     "toon_smooth": True,
     "toon_flat_color": True,
-    "toon_faceted": False,
     "toon_rim": True,
     "toon_rim_color": (0.3, 0.9, 1.0),
     "toon_rim_width": 0.3,
@@ -502,24 +539,81 @@ COMIC_PRESET = {
     "outline_3d_width": 0.02,
     "stylize_silhouette": True,
     "silhouette_width": 4,
-    "ink_color": (0.0, 0.0, 0.0, 1.0),
-    "stylize_glow": False,
-    "stylize_posterize": False,
-    "stylize_pixelate": False,
 }
 
+# (identifier, label, description, values)
+PRESETS = (
+    ("PLAIN", "Plain", "Every look setting back to default: no Stylize, studio lighting", {}),
+    ("COMIC", "Comic", "Inked flat fills, upper-left key light, cyan rim", _COMIC),
+    (
+        "NEON",
+        "Neon",
+        "Comic in near-black with a wide glowing cyan rim",
+        {
+            **_COMIC,
+            "toon_rim_width": 0.4,
+            "toon_brightness": 0.5,
+            "toon_saturation": 1.4,
+            "toon_ink_shadows": 0.35,
+            "silhouette_width": 3,
+            "stylize_glow": True,
+            "glow_threshold": 0.55,
+            "glow_radius": 20,
+            "glow_intensity": 1.5,
+        },
+    ),
+    (
+        "MAGENTA",
+        "Magenta",
+        "Comic with a hot magenta rim and a soft glow",
+        {
+            **_COMIC,
+            "toon_rim_color": (1.0, 0.2, 0.55),
+            "stylize_glow": True,
+            "glow_threshold": 0.6,
+            "glow_radius": 14,
+        },
+    ),
+    (
+        "NOIR",
+        "Noir",
+        "Two bands, deep ink shadows, muted color, thin white rim, heavy outline",
+        {
+            **_COMIC,
+            "key_elevation": 45.0,
+            "key_side": -55.0,
+            "toon_bands": 2,
+            "toon_rim_color": (1.0, 1.0, 1.0),
+            "toon_rim_width": 0.15,
+            "toon_brightness": 0.8,
+            "toon_saturation": 0.6,
+            "toon_ink_shadows": 0.45,
+            "silhouette_width": 6,
+        },
+    ),
+)
 
-class RASTERSHEET_OT_comic_preset(bpy.types.Operator):
-    bl_idname = "rastersheet.comic_preset"
-    bl_label = "Comic Preset"
+PRESET_VALUES = {identifier: values for identifier, _, _, values in PRESETS}
+
+
+class RASTERSHEET_OT_apply_preset(bpy.types.Operator):
+    bl_idname = "rastersheet.apply_preset"
+    bl_label = "Apply Look Preset"
     bl_description = (
-        "Set the lighting and Stylize options to the inked comic look. "
+        "Set lighting and every Stylize option to a preset look. "
         "Camera, resolution and output are left alone. Undoable"
     )
     bl_options = {"REGISTER", "UNDO"}
 
+    preset: bpy.props.EnumProperty(
+        name="Preset",
+        items=[(identifier, label, description) for identifier, label, description, _ in PRESETS],
+    )
+
     def execute(self, context):
         settings = context.scene.rastersheet
-        for name, value in COMIC_PRESET.items():
+        for name in LOOK_SETTINGS:
+            settings.property_unset(name)
+        for name, value in PRESET_VALUES[self.preset].items():
             setattr(settings, name, value)
         return {"FINISHED"}
