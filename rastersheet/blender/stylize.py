@@ -234,7 +234,11 @@ def apply_outline(stack, objects, width, color):
         modifier.offset = 1.0
         modifier.use_flip_normals = True
         modifier.use_rim = False
-        modifier.use_even_offset = True
+        # Even thickness divides by the angle between a vertex's faces, so at
+        # a near-degenerate corner (a thin lever, a bevel seam) one vertex
+        # shoots out to many times the width and draws a large black spike.
+        # Plain offset never exceeds the width.
+        modifier.use_even_offset = False
         # Blender clamps a shell's material index to the last slot, and the
         # outline is the last slot, so an offset past every existing index
         # sends every shell face to it regardless of the faces' own slots.

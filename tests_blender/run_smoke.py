@@ -1523,6 +1523,43 @@ def test_toon_and_ink_outline_handle_a_mesh_with_no_materials():
 
 
 @check
+def test_ink_outline_hull_stays_within_its_width_at_sharp_corners():
+    # A frag grenade's lever rendered a black triangle the size of the
+    # grenade: Solidify's even-thickness mode blows a vertex out at a
+    # near-degenerate corner. A needle-thin wedge reproduces that corner.
+    import contextlib
+
+    import bmesh
+
+    from bl_ext.user_default.rastersheet.blender import stylize as stylize_module
+
+    name = "OutlineNeedleProbe"
+    existing = bpy.data.objects.get(name)
+    if existing:
+        bpy.data.objects.remove(existing, do_unlink=True)
+    mesh = bpy.data.meshes.new(name)
+    bm = bmesh.new()
+    verts = [bm.verts.new(co) for co in ((0, 0, 0), (1, 0, 0), (1, 0.001, 0), (0.5, 0, 0.001))]
+    for face in ((0, 1, 2), (0, 3, 1), (1, 3, 2), (2, 3, 0)):
+        bm.faces.new([verts[i] for i in face])
+    bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
+    bm.to_mesh(mesh)
+    bm.free()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.scene.collection.objects.link(obj)
+
+    width = 0.02
+    try:
+        with contextlib.ExitStack() as stack:
+            stylize_module.apply_outline(stack, [obj], width, (0.0, 0.0, 0.0, 1.0))
+            evaluated = obj.evaluated_get(bpy.context.evaluated_depsgraph_get())
+            reach = max(abs(c) for corner in evaluated.bound_box for c in corner)
+        assert reach <= 1.0 + 2 * width, reach
+    finally:
+        bpy.data.objects.remove(obj, do_unlink=True)
+
+
+@check
 def test_toon_shading_refuses_a_non_eevee_engine():
     import os
 
