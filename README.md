@@ -107,6 +107,14 @@ combination:
   - *Ignore Surface Detail* — disconnect normal, displacement and roughness
     maps so the bands follow the model's shape instead of breaking into
     speckle. Color textures (the model's paint) are kept.
+  - *Flat Color* — replace each image texture feeding a base color with its
+    average color, so every part is one flat fill. Photographic grime banded
+    into tiers reads as a photocopy, not a drawing.
+  - *Faceted* — shade by true face normals so bands become crisp planes.
+    Suits low-poly, hard-surface models; on a dense smooth mesh it shows
+    staircase facets.
+  - *Rim Light* — a hard band of *Rim Color* where surfaces turn away from
+    the camera, *Rim Width* wide: the comic edge highlight.
   - *Brightness* / *Saturation* — scale the bands' on-screen brightness and
     color intensity.
   - *Ink Shadows* — bands at or below this brightness become solid black,

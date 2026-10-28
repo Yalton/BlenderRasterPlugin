@@ -1462,7 +1462,8 @@ def test_stylize_effects_are_all_off_by_default():
     flags = [p.identifier for p in settings.bl_rna.properties if p.identifier.startswith("stylize_")]
     assert len(flags) == 6, flags
     toon = settings.bl_rna.properties
-    neutral = {"toon_matte": False, "toon_smooth": False, "toon_brightness": 1.0,
+    neutral = {"toon_matte": False, "toon_smooth": False, "toon_flat_color": False,
+               "toon_faceted": False, "toon_rim": False, "toon_brightness": 1.0,
                "toon_saturation": 1.0, "toon_ink_shadows": 0.0}
     for name, value in neutral.items():
         assert toon[name].default == value, (name, toon[name].default)
@@ -1595,7 +1596,7 @@ def test_toon_matte_and_smooth_rewire_only_the_copy():
         return node.inputs[socket].is_linked, node.inputs[socket]
 
     with contextlib.ExitStack() as stack:
-        stylize_module.apply_toon(stack, [obj], 3, matte=True, smooth=True)
+        stylize_module.apply_toon(stack, [obj], stylize_module.ToonLook(matte=True, smooth=True))
         copy = obj.material_slots[0].material.node_tree
         metallic_linked, metallic = linked(copy, "ShaderNodeBsdfPrincipled", "Metallic")
         assert not metallic_linked and metallic.default_value == 0.0
@@ -1609,6 +1610,47 @@ def test_toon_matte_and_smooth_rewire_only_the_copy():
         assert principled.inputs[socket].is_linked, socket
     assert output.inputs["Displacement"].is_linked
     bpy.data.objects.remove(obj, do_unlink=True)
+
+
+@check
+def test_toon_flat_color_faceted_and_rim_rewire_only_the_copy():
+    import contextlib
+
+    from bl_ext.user_default.rastersheet.blender import stylize as stylize_module
+
+    obj = _fresh_cube("ToonFlatProbe")
+    material = bpy.data.materials.new("ToonFlatMaterial")
+    material.use_nodes = True
+    tree = material.node_tree
+    principled = tree.nodes["Principled BSDF"]
+    image = bpy.data.images.new("ToonFlatTexture", 2, 1, alpha=False)
+    image.pixels.foreach_set([1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0])  # red | blue
+    texture = tree.nodes.new("ShaderNodeTexImage")
+    texture.image = image
+    tree.links.new(texture.outputs["Color"], principled.inputs["Base Color"])
+    obj.data.materials.append(material)
+
+    look = stylize_module.ToonLook(flat_color=True, faceted=True, rim=True)
+    try:
+        with contextlib.ExitStack() as stack:
+            stylize_module.apply_toon(stack, [obj], look)
+            copy = obj.material_slots[0].material.node_tree
+            bsdf = next(n for n in copy.nodes if n.bl_idname == "ShaderNodeBsdfPrincipled")
+            base = bsdf.inputs["Base Color"]
+            assert not base.is_linked
+            # The mean of pure red and pure blue, averaged in linear space.
+            r, g, b, _ = base.default_value
+            assert abs(r - 0.5) < 0.02 and g < 0.02 and abs(b - 0.5) < 0.02, tuple(base.default_value)
+            normal_source = bsdf.inputs["Normal"].links[0].from_socket
+            assert normal_source.name == "True Normal", normal_source.name
+            assert any(n.bl_idname == "ShaderNodeLayerWeight" for n in copy.nodes)
+
+        assert principled.inputs["Base Color"].is_linked
+        assert not principled.inputs["Normal"].is_linked
+        assert not any(n.bl_idname == "ShaderNodeLayerWeight" for n in tree.nodes)
+    finally:
+        bpy.data.objects.remove(obj, do_unlink=True)
+        bpy.data.images.remove(image)
 
 
 @check

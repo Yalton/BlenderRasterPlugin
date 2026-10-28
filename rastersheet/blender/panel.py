@@ -62,6 +62,12 @@ class RASTERSHEET_PT_panel(bpy.types.Panel):
             stylize.prop(settings, "toon_bands")
             stylize.prop(settings, "toon_matte")
             stylize.prop(settings, "toon_smooth")
+            stylize.prop(settings, "toon_flat_color")
+            stylize.prop(settings, "toon_faceted")
+            stylize.prop(settings, "toon_rim")
+            if settings.toon_rim:
+                stylize.prop(settings, "toon_rim_color")
+                stylize.prop(settings, "toon_rim_width")
             stylize.prop(settings, "toon_brightness")
             stylize.prop(settings, "toon_saturation")
             stylize.prop(settings, "toon_ink_shadows")

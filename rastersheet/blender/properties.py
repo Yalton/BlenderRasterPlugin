@@ -165,6 +165,30 @@ class RasterSheetSettings(bpy.types.PropertyGroup):
             "model's shape instead of breaking into speckle along their edges"
         ),
     )
+    toon_flat_color: bpy.props.BoolProperty(
+        name="Flat Color",
+        default=False,
+        description=(
+            "Replace each color texture with its average color, so every part is one "
+            "flat fill instead of banded photographic grime"
+        ),
+    )
+    toon_faceted: bpy.props.BoolProperty(
+        name="Faceted",
+        default=False,
+        description="Shade by true face normals: bands become crisp planes instead of soft blobs",
+    )
+    toon_rim: bpy.props.BoolProperty(
+        name="Rim Light",
+        default=False,
+        description="A hard band of color where surfaces turn away from the camera",
+    )
+    toon_rim_color: bpy.props.FloatVectorProperty(
+        name="Rim Color", subtype="COLOR", size=3, min=0.0, soft_max=1.0, default=(0.3, 0.9, 1.0)
+    )
+    toon_rim_width: bpy.props.FloatProperty(
+        name="Rim Width", default=0.3, min=0.0, max=1.0, subtype="FACTOR"
+    )
     toon_brightness: bpy.props.FloatProperty(
         name="Brightness",
         default=1.0,

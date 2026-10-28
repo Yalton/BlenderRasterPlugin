@@ -356,14 +356,7 @@ class _RenderMixin:
                 styled = stylize_module.styled_objects(context)
                 if settings.stylize_toon:
                     for warning in stylize_module.apply_toon(
-                        stack,
-                        styled,
-                        settings.toon_bands,
-                        brightness=settings.toon_brightness,
-                        saturation=settings.toon_saturation,
-                        ink_shadows=settings.toon_ink_shadows,
-                        matte=settings.toon_matte,
-                        smooth=settings.toon_smooth,
+                        stack, styled, stylize_module.toon_look(settings)
                     ):
                         self.report({"WARNING"}, warning)
                 if settings.stylize_outline_3d:

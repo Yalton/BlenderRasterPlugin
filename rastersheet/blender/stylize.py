@@ -14,6 +14,8 @@ objects (a bullet plus its trail) should come out in one consistent style.
 The 2D effects run after rendering, on each frame PNG, before packing.
 """
 
+from dataclasses import dataclass
+
 import bpy
 import numpy as np
 
@@ -36,6 +38,23 @@ def is_eevee(engine):
 
 
 # --- Toon shading -----------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ToonLook:
+    """Every toon setting. The defaults are the neutral, plain-banding look."""
+
+    bands: int = 3
+    brightness: float = 1.0
+    saturation: float = 1.0
+    ink_shadows: float = 0.0
+    matte: bool = False
+    smooth: bool = False
+    flat_color: bool = False
+    faceted: bool = False
+    rim: bool = False
+    rim_color: tuple = (0.3, 0.9, 1.0)
+    rim_width: float = 0.3
 
 
 def _surface_link(tree):
@@ -105,7 +124,74 @@ def _drop_surface_detail(tree):
                 tree.links.remove(link)
 
 
-def _toonify(material, bands, brightness, saturation, ink_shadows):
+def _srgb_to_linear(values):
+    return np.where(values <= 0.04045, values / 12.92, ((values + 0.055) / 1.055) ** 2.4)
+
+
+def _average_color(image):
+    """The image's mean color as a linear RGBA tuple, or None if unreadable.
+
+    `Image.pixels` holds the stored values -- sRGB-encoded for a color
+    texture -- so they are linearized before averaging, because a BSDF's
+    Base Color socket is linear. Averaging the encoded values would come out
+    too dark.
+    """
+    width, height = image.size
+    if width == 0 or height == 0:
+        return None
+    buffer = np.empty(width * height * image.channels, dtype=np.float32)
+    image.pixels.foreach_get(buffer)
+    pixels = buffer.reshape(-1, image.channels)
+    rgb = pixels[:, :3] if image.channels >= 3 else np.repeat(pixels[:, :1], 3, axis=1)
+    if image.colorspace_settings.name.lower().startswith("srgb"):
+        rgb = _srgb_to_linear(rgb)
+    mean = rgb.mean(axis=0)
+    return (float(mean[0]), float(mean[1]), float(mean[2]), 1.0)
+
+
+def _flatten_color(tree):
+    """Replace each image texture feeding a Base Color with its mean color.
+
+    Photographic texture -- grime, scratches, color noise -- banded into
+    tiers reads as a photocopy rather than a drawing. Inked art fills each
+    part with one color, and a texture's mean is the part's color. Inputs
+    driven by anything other than an image (procedural textures, mixes)
+    are left alone: there is no single color to read off them.
+    """
+    for node in tree.nodes:
+        if not node.bl_idname.startswith("ShaderNodeBsdf"):
+            continue
+        base = node.inputs.get("Base Color") or node.inputs.get("Color")
+        if base is None or not base.is_linked:
+            continue
+        source = base.links[0].from_node
+        if source.bl_idname != "ShaderNodeTexImage" or source.image is None:
+            continue
+        color = _average_color(source.image)
+        if color is None:
+            continue
+        tree.links.remove(base.links[0])
+        base.default_value = color
+
+
+def _facet(tree):
+    """Shade every BSDF with the true face normal instead of the smoothed one.
+
+    Banding a smooth sphere gives soft concentric blobs; banding flat faces
+    gives crisp planes, which is how inked hard-surface art reads. Done in
+    the shader so the mesh itself is never touched. Replaces any normal map,
+    which would put the smooth detail back.
+    """
+    geometry = tree.nodes.new("ShaderNodeNewGeometry")
+    for node in list(tree.nodes):
+        if not node.bl_idname.startswith("ShaderNodeBsdf"):
+            continue
+        normal = node.inputs.get("Normal")
+        if normal is not None:
+            tree.links.new(geometry.outputs["True Normal"], normal)
+
+
+def _toonify(material, look):
     """Rewire `material`'s surface through a banded Shader to RGB.
 
     Shader to RGB captures the fully lit color (Eevee only); its HSV value is
@@ -138,6 +224,12 @@ def _toonify(material, bands, brightness, saturation, ink_shadows):
     tree.links.new(to_rgb.outputs["Color"], separate.inputs["Color"])
 
     encode = _math(tree, "POWER", 1.0 / 2.2)
+    bands, brightness, saturation, ink_shadows = (
+        look.bands,
+        look.brightness,
+        look.saturation,
+        look.ink_shadows,
+    )
     scale = _math(tree, "MULTIPLY", float(bands))
     snap = tree.nodes.new("ShaderNodeMath")
     snap.operation = "ROUND"
@@ -169,9 +261,13 @@ def _toonify(material, bands, brightness, saturation, ink_shadows):
     tree.links.new(saturate.outputs[0], combine.inputs[1])
     tree.links.new(decode.outputs[0], combine.inputs[2])
 
+    color_socket = combine.outputs["Color"]
+    if look.rim:
+        color_socket = _add_rim(tree, color_socket, look)
+
     emission = tree.nodes.new("ShaderNodeEmission")
     emission.inputs["Strength"].default_value = 1.0
-    tree.links.new(combine.outputs["Color"], emission.inputs["Color"])
+    tree.links.new(color_socket, emission.inputs["Color"])
 
     # Keep the material's own transparency: Shader to RGB reports it as alpha.
     transparent = tree.nodes.new("ShaderNodeBsdfTransparent")
@@ -182,6 +278,30 @@ def _toonify(material, bands, brightness, saturation, ink_shadows):
 
     tree.links.new(mix.outputs[0], output.inputs["Surface"])
     return True
+
+
+def _add_rim(tree, color_socket, look):
+    """Paint a hard band of `rim_color` where the surface turns away from view.
+
+    Layer Weight's Facing output is 0 facing the camera and 1 at grazing
+    angles; everything past `1 - rim_width` gets the rim. It is a hard step,
+    not a blend, so it reads as a drawn edge highlight like a comic's rim
+    light rather than a soft Fresnel glow. The rim color is emitted as-is,
+    so a bright one also feeds Glow.
+    """
+    facing = tree.nodes.new("ShaderNodeLayerWeight")
+    facing.inputs["Blend"].default_value = 0.5
+    edge = _math(tree, "GREATER_THAN", 1.0 - float(look.rim_width))
+    tree.links.new(facing.outputs["Facing"], edge.inputs[0])
+
+    mix = tree.nodes.new("ShaderNodeMix")
+    mix.data_type = "RGBA"
+    tree.links.new(edge.outputs[0], mix.inputs["Factor"])
+    a_input = next(s for s in mix.inputs if s.identifier == "A_Color")
+    b_input = next(s for s in mix.inputs if s.identifier == "B_Color")
+    tree.links.new(color_socket, a_input)
+    b_input.default_value = (*look.rim_color[:3], 1.0)
+    return next(s for s in mix.outputs if s.identifier == "Result_Color")
 
 
 def _default_material(stack):
@@ -200,7 +320,7 @@ def _append_slot(stack, data, material):
     stack.callback(data.materials.pop)
 
 
-def apply_toon(stack, objects, bands, brightness=1.0, saturation=1.0, ink_shadows=0.0, matte=False, smooth=False):
+def apply_toon(stack, objects, look):
     """Swap toon copies of every material into the objects' slots.
 
     Returns warnings for materials that could not be converted (no node
@@ -232,11 +352,15 @@ def apply_toon(stack, objects, bands, brightness=1.0, saturation=1.0, ink_shadow
                 copy = original.copy()
                 _track(stack, bpy.data.materials, copy)
                 copy.use_nodes = True
-                if matte:
+                if look.matte:
                     _make_matte(copy.node_tree)
-                if smooth:
+                if look.smooth:
                     _drop_surface_detail(copy.node_tree)
-                if not _toonify(copy, bands, brightness, saturation, ink_shadows):
+                if look.flat_color:
+                    _flatten_color(copy.node_tree)
+                if look.faceted:
+                    _facet(copy.node_tree)
+                if not _toonify(copy, look):
                     warnings.append(f"Toon shading skipped material {original.name!r}: no Surface output")
                 copies[original] = copy
             snapshot.guard(stack, slot, "material")
@@ -321,6 +445,22 @@ def apply_outline(stack, objects, width, color):
         modifier.material_offset = len(data.materials)
 
     return warnings
+
+
+def toon_look(settings):
+    return ToonLook(
+        bands=settings.toon_bands,
+        brightness=settings.toon_brightness,
+        saturation=settings.toon_saturation,
+        ink_shadows=settings.toon_ink_shadows,
+        matte=settings.toon_matte,
+        smooth=settings.toon_smooth,
+        flat_color=settings.toon_flat_color,
+        faceted=settings.toon_faceted,
+        rim=settings.toon_rim,
+        rim_color=tuple(settings.toon_rim_color),
+        rim_width=settings.toon_rim_width,
+    )
 
 
 # --- 2D post -----------------------------------------------------------------
