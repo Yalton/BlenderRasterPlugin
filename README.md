@@ -84,13 +84,22 @@ right one is chosen from the running version; Cycles is checked against the
 engines actually registered in your build and is only refused when it is
 genuinely disabled. *Lighting* selects a bundled studio HDRI (Material
 Preview), the scene's own world, scene lights only against a black world,
-flat/uniform ambient light, or a custom HDRI file you provide. *View
+flat/uniform ambient light, a camera-relative *Key Light*, or a custom
+HDRI file you provide. *Key Light* adds a temporary sun at *Key Elevation*
+degrees above and *Key Side* degrees beside the camera (negative = left),
+so every render is lit the same way wherever the camera is, with no lamp to
+place; *Ambient* adds gray world fill. Other lamps in the scene still
+contribute. *View
 Transform* selects the color transform applied to the render (Standard,
 AgX, Filmic, or the scene's own). *Transparent BG* renders with an alpha
 channel. *Resolution* uses either the scene's render resolution or a
 custom width/height you set here.
 
-**Stylize** — optional comic/pixel looks, every one **off by default**. With
+**Stylize** — the **Comic Preset** button beside the heading sets lighting
+and every Stylize option to the inked card-art look (Key Light, toon with
+Matte, Ignore Surface Detail, Flat Color and a cyan Rim Light, 3D and 2D
+black ink outlines); camera, resolution and output are left alone, and it is
+undoable. Optional comic/pixel looks, every one **off by default**. With
 nothing ticked, rendering is exactly what it was without this box. Tick any
 combination:
 

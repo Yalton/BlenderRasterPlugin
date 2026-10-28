@@ -369,6 +369,8 @@ class _RenderMixin:
                 scene.camera = camera_module.resolve_camera(
                     context, settings, stack, obj, corners, frame_matrices, width / height
                 )
+                if settings.lighting_mode == "KEY_LIGHT":
+                    lighting_module.add_key_light(context, settings, stack)
 
                 window_manager.progress_begin(0, settings.frame_count)
                 try:
@@ -472,3 +474,52 @@ class RASTERSHEET_OT_render_still(_RenderMixin, bpy.types.Operator):
             export_json=False,
             export_godot=False,
         )
+
+
+# The look settled on for Chain Shot card art: flat inked fills, a hard key
+# from the upper left, cyan rim, black ink. Everything not named here --
+# camera, resolution, output -- is left as the user set it.
+COMIC_PRESET = {
+    "engine_mode": "EEVEE",
+    "lighting_mode": "KEY_LIGHT",
+    "key_elevation": 35.0,
+    "key_side": -35.0,
+    "key_strength": 4.0,
+    "key_ambient": 0.0,
+    "stylize_toon": True,
+    "toon_bands": 3,
+    "toon_matte": True,
+    "toon_smooth": True,
+    "toon_flat_color": True,
+    "toon_faceted": False,
+    "toon_rim": True,
+    "toon_rim_color": (0.3, 0.9, 1.0),
+    "toon_rim_width": 0.3,
+    "toon_brightness": 0.6,
+    "toon_saturation": 1.2,
+    "toon_ink_shadows": 0.3,
+    "stylize_outline_3d": True,
+    "outline_3d_width": 0.02,
+    "stylize_silhouette": True,
+    "silhouette_width": 4,
+    "ink_color": (0.0, 0.0, 0.0, 1.0),
+    "stylize_glow": False,
+    "stylize_posterize": False,
+    "stylize_pixelate": False,
+}
+
+
+class RASTERSHEET_OT_comic_preset(bpy.types.Operator):
+    bl_idname = "rastersheet.comic_preset"
+    bl_label = "Comic Preset"
+    bl_description = (
+        "Set the lighting and Stylize options to the inked comic look. "
+        "Camera, resolution and output are left alone. Undoable"
+    )
+    bl_options = {"REGISTER", "UNDO"}
+
+    def execute(self, context):
+        settings = context.scene.rastersheet
+        for name, value in COMIC_PRESET.items():
+            setattr(settings, name, value)
+        return {"FINISHED"}

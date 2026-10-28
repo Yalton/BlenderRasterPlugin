@@ -45,6 +45,11 @@ class RASTERSHEET_PT_panel(bpy.types.Panel):
         rendering.prop(settings, "lighting_mode")
         if settings.lighting_mode == "MATERIAL_PREVIEW":
             rendering.prop(settings, "studio_light")
+        elif settings.lighting_mode == "KEY_LIGHT":
+            rendering.prop(settings, "key_elevation")
+            rendering.prop(settings, "key_side")
+            rendering.prop(settings, "key_strength")
+            rendering.prop(settings, "key_ambient")
         elif settings.lighting_mode == "CUSTOM_HDRI":
             rendering.prop(settings, "hdri_path")
             rendering.prop(settings, "hdri_strength")
@@ -56,7 +61,9 @@ class RASTERSHEET_PT_panel(bpy.types.Panel):
             rendering.prop(settings, "resolution_y")
 
         stylize = layout.box()
-        stylize.label(text="Stylize")
+        header = stylize.row()
+        header.label(text="Stylize")
+        header.operator("rastersheet.comic_preset", icon="BRUSH_DATA")
         stylize.prop(settings, "stylize_toon")
         if settings.stylize_toon:
             stylize.prop(settings, "toon_bands")

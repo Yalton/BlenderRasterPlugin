@@ -972,7 +972,7 @@ def test_lighting_modes_all_render_and_restore_the_world():
     before_world = scene.world
     before_worlds = len(bpy.data.worlds)
 
-    for mode in ["MATERIAL_PREVIEW", "SCENE_WORLD", "SCENE_LIGHTS", "FLAT"]:
+    for mode in ["MATERIAL_PREVIEW", "SCENE_WORLD", "SCENE_LIGHTS", "FLAT", "KEY_LIGHT"]:
         out = os.path.join(SCRATCH, f"light_{mode.lower()}")
         shutil.rmtree(out, ignore_errors=True)
         settings.lighting_mode = mode
@@ -1780,6 +1780,63 @@ def test_toon_ink_shadows_and_brightness_darken_the_render():
     assert plain > 0.2, plain
     assert dimmed < plain * 0.75, (dimmed, plain)
     assert inked < 0.02, inked
+
+
+@check
+def test_key_light_is_placed_relative_to_the_camera_and_removed():
+    import os
+
+    from mathutils import Vector
+
+    scene, obj, settings = _stylize_probe("KeyLightProbe", os.path.join(SCRATCH, "key_light"))
+    settings.lighting_mode = "KEY_LIGHT"
+    settings.key_elevation = 35.0
+    settings.key_side = -35.0
+    lights_before = set(bpy.data.lights)
+    objects_before = set(bpy.data.objects)
+
+    def read():
+        sun = bpy.data.objects.get("RasterSheet Key Light")
+        if sun is None:
+            return None
+        camera = scene.camera.matrix_world
+        to_light = sun.matrix_world.to_quaternion() @ Vector((0.0, 0.0, 1.0))
+        # The light's direction in the camera's own frame: up is +Y, left is -X.
+        local = camera.to_quaternion().inverted() @ to_light
+        return sun.data.type, local
+
+    seen, spy = _spy_during_render(read)
+    try:
+        assert bpy.ops.rastersheet.render_still() == {"FINISHED"}
+    finally:
+        bpy.app.handlers.render_pre.remove(spy)
+
+    assert seen[0] is not None, "no key light during the render"
+    light_type, local = seen[0]
+    assert light_type == "SUN"
+    assert local.y > 0.3, f"key light is not above the camera: {tuple(local)}"
+    assert local.x < -0.3, f"key light is not left of the camera: {tuple(local)}"
+    assert local.z > 0.3, f"key light is not in front of the subject: {tuple(local)}"
+    assert set(bpy.data.lights) == lights_before
+    assert set(bpy.data.objects) == objects_before
+
+
+@check
+def test_comic_preset_sets_the_look_and_leaves_output_alone():
+    from bl_ext.user_default.rastersheet.blender.operator import COMIC_PRESET
+
+    settings = bpy.context.scene.rastersheet
+    settings.output_dir = "/tmp/keep_me/"
+    settings.resolution_x = 123
+    assert bpy.ops.rastersheet.comic_preset() == {"FINISHED"}
+    for name, value in COMIC_PRESET.items():
+        actual = getattr(settings, name)
+        if isinstance(value, tuple):
+            assert all(abs(a - b) < 1e-6 for a, b in zip(actual, value)), (name, tuple(actual))
+        else:
+            assert actual == value or abs(actual - value) < 1e-6, (name, actual)
+    assert settings.output_dir == "/tmp/keep_me/"
+    assert settings.resolution_x == 123
 
 
 def main():

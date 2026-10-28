@@ -84,6 +84,7 @@ class RasterSheetSettings(bpy.types.PropertyGroup):
             ("MATERIAL_PREVIEW", "Material Preview", "Light with a bundled studio HDRI"),
             ("SCENE_WORLD", "Scene World", "Leave the scene's world untouched"),
             ("SCENE_LIGHTS", "Scene Lights", "Black world, scene lamps only"),
+            ("KEY_LIGHT", "Key Light", "A sun placed at a fixed angle to the camera, plus dim ambient"),
             ("FLAT", "Flat / Uniform", "Even white ambient light (not unlit shading)"),
             ("CUSTOM_HDRI", "Custom HDRI", "Light with a user-supplied HDRI"),
         ],
@@ -92,6 +93,25 @@ class RasterSheetSettings(bpy.types.PropertyGroup):
     studio_light: bpy.props.EnumProperty(name="Studio HDRI", items=_studio_light_items)
     hdri_path: bpy.props.StringProperty(name="HDRI", subtype="FILE_PATH", default="")
     hdri_strength: bpy.props.FloatProperty(name="Strength", default=1.0, min=0.0)
+    key_elevation: bpy.props.FloatProperty(
+        name="Key Elevation",
+        default=35.0,
+        min=-89.0,
+        max=89.0,
+        description="Degrees above (positive) or below the camera the key light comes from",
+    )
+    key_side: bpy.props.FloatProperty(
+        name="Key Side",
+        default=-35.0,
+        min=-89.0,
+        max=89.0,
+        description="Degrees to the left (negative) or right of the camera the key light comes from",
+    )
+    key_strength: bpy.props.FloatProperty(name="Key Strength", default=4.0, min=0.0, soft_max=20.0)
+    key_ambient: bpy.props.FloatProperty(
+        name="Ambient", default=0.0, min=0.0, soft_max=1.0, subtype="FACTOR",
+        description="Gray world light filling the shadow side; 0 leaves shadows to the toon bands",
+    )
 
     # The view_transform enum cannot be introspected -- its enum_items report a
     # single NONE entry because the values come from the OCIO config at
