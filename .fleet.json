@@ -1,0 +1,11 @@
+{
+  "types": [],
+  "verify_command": "pytest -q",
+  "git_authority": {
+    "commit": "agent",
+    "push_branch": "agent",
+    "push_main": "owner",
+    "merge": "pr",
+    "default_branch": "master"
+  }
+}
